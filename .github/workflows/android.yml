@@ -86,6 +86,17 @@ jobs:
           ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
         run: gradle --no-daemon assembleRelease
 
+      - name: Verify signed release APK
+        if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+        shell: bash
+        run: |
+          set -euo pipefail
+          sdk_root="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-}}"
+          : "${sdk_root:?Android SDK path is unavailable}"
+          apksigner="$(find "$sdk_root/build-tools" -mindepth 2 -maxdepth 2 -type f -name apksigner | sort -V | tail -n 1)"
+          : "${apksigner:?Android SDK apksigner was not found}"
+          "$apksigner" verify --verbose --print-certs app/build/outputs/apk/release/app-release.apk
+
       - name: Build debug APK for fork pull request checks (secrets are unavailable)
         if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository
         run: gradle --no-daemon assembleDebug
