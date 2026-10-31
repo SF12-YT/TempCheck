@@ -130,7 +130,7 @@ object WeatherModelExport {
             .put("temperature_target", JSONObject()
                 .put("name", "next_hour_air_temperature")
                 .put("unit", "degrees_celsius")
-                .put("sole_observation_source", "Open-Meteo Best Match"))
+                .put("sole_observation_source", "OPEN_METEO_BEST_MATCH"))
             .put("data_provenance", JSONObject()
                 .put("Open-Meteo Best Match", "Exclusive source for historical air-temperature targets, previous-temperature inputs, and historical hourly weather predictors. Missing Open-Meteo Best Match fields remain missing; no other provider fills them.")
                 .put("Open-Meteo Weather", "Previous completed local-day daily context only. The request uses past_days=1 and forecast_days=0, requests only non-temperature daily aggregates, and stores them separately. These daily aggregates are not features in this model.")

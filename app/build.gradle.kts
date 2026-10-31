@@ -21,8 +21,7 @@ android {
     namespace = "com.example.tempalearn"
     compileSdk = 35
 
-    // AGP 8 disables BuildConfig generation by default. VisualCrossingClient
-    // reads BuildConfig, so explicitly generate the class for all variants.
+    // Generate BuildConfig explicitly for all Android variants.
     buildFeatures {
         buildConfig = true
     }
@@ -50,8 +49,8 @@ android {
         applicationId = "com.example.tempalearn"
         minSdk = 26
         targetSdk = 34
-        versionCode = 13
-        versionName = "0.7.1"
+        versionCode = 14
+        versionName = "0.8.0"
     }
 
     compileOptions {
