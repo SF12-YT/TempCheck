@@ -19,7 +19,7 @@ class ReferencePredictorTests(unittest.TestCase):
             "timezone": "Australia/Sydney",
             "default_location": self.location,
             "weights": [0.0] * 62,
-            "feature_count": 53,
+            "feature_count": 62,
             "feature_schema": [{"index": index, "name": name} for index, name in enumerate(EXPECTED_FEATURES)],
         }
 
@@ -31,7 +31,7 @@ class ReferencePredictorTests(unittest.TestCase):
             "Australia/Sydney",
             self.location,
         )
-        self.assertEqual(len(vector), 53)
+        self.assertEqual(len(vector), 62)
         self.assertTrue(all(isinstance(value, float) for value in vector))
 
     def test_zero_weights_return_baseline(self):

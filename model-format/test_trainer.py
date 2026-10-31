@@ -43,7 +43,7 @@ def rows(source="OPEN_METEO_BEST_MATCH"):
 
 
 class TrainerTests(unittest.TestCase):
-    def test_trainer_produces_complete_v2_coefficients_and_metrics(self):
+    def test_trainer_produces_complete_v3_coefficients_and_metrics(self):
         with tempfile.TemporaryDirectory() as directory:
             folder = Path(directory)
             model = folder / "model.json"
@@ -101,7 +101,7 @@ class TrainerTests(unittest.TestCase):
             data = folder / "open_meteo.jsonl"
             output = folder / "updated.json"
             model.write_text(json.dumps(base_model()), encoding="utf-8")
-            invalid = rows(source="BOM")
+            invalid = rows(source="OPEN_METEO_BEST_MATCH")
             for row in invalid:
                 row["weather_source"] = "OTHER"
             data.write_text("\n".join(json.dumps(row) for row in invalid) + "\n", encoding="utf-8")

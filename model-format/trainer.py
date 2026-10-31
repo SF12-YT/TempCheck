@@ -69,9 +69,9 @@ def _read_examples(path: Path) -> tuple[list[tuple[list[float], float]], list[tu
         except json.JSONDecodeError as exc:
             raise ValueError(f"Invalid JSON on line {line_number}: {exc}") from exc
         if str(row.get("temperature_source", "")).strip().upper() != "OPEN_METEO_BEST_MATCH":
-            raise ValueError(f'Line {line_number} must explicitly declare temperature_source=\"Open-Meteo Best Match\"; mixed-source training is prohibited.')
+            raise ValueError(f'Line {line_number} must explicitly declare temperature_source=\"OPEN_METEO_BEST_MATCH\"; mixed-source training is prohibited.')
         if str(row.get("weather_source", "")).strip().upper() != "OPEN_METEO_BEST_MATCH":
-            raise ValueError(f'Line {line_number} must explicitly declare weather_source=\"Open-Meteo Best Match\"; mixed-provider predictors are prohibited.')
+            raise ValueError(f'Line {line_number} must explicitly declare weather_source=\"OPEN_METEO_BEST_MATCH\"; mixed-provider predictors are prohibited.')
         grouped.setdefault(str(row.get("location_key", "default")), []).append(row)
 
     training: list[tuple[list[float], float]] = []
@@ -138,7 +138,7 @@ def train_model(model_path: Path, data_path: Path, output_path: Path) -> None:
     if model.get("format") != "templearn-weather-model" or model.get("format_version") != 3:
         raise ValueError("Expected a TempLearn model format v3 model.json.")
     if model.get("feature_count") != len(EXPECTED_FEATURES):
-        raise ValueError("Model feature_count does not match the v2 schema.")
+        raise ValueError("Model feature_count does not match the v3 schema.")
     schema = model.get("feature_schema")
     if not isinstance(schema, list) or len(schema) != len(EXPECTED_FEATURES):
         raise ValueError("Model feature_schema is missing, reordered or incompatible.")
@@ -148,7 +148,7 @@ def train_model(model_path: Path, data_path: Path, output_path: Path) -> None:
         raise ValueError("Model feature_schema is missing, reordered or incompatible.")
     weights = model.get("weights")
     if not isinstance(weights, list) or len(weights) != len(EXPECTED_FEATURES):
-        raise ValueError("Model does not contain exactly 53 fitted coefficients.")
+        raise ValueError("Model does not contain exactly 62 fitted coefficients.")
     training, validation, contributing, start, end = _read_examples(data_path)
     prior = model.get("training_prior_weights")
     if prior is not None:
@@ -194,7 +194,7 @@ def train_model(model_path: Path, data_path: Path, output_path: Path) -> None:
 
 def main() -> int:
     if len(sys.argv) != 4:
-        print("Usage: python trainer.py model.json bom_training.jsonl updated_model.json", file=sys.stderr)
+        print("Usage: python trainer.py model.json open_meteo_training.jsonl updated_model.json", file=sys.stderr)
         return 2
     train_model(Path(sys.argv[1]), Path(sys.argv[2]), Path(sys.argv[3]))
     return 0
