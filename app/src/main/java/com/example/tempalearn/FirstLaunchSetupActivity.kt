@@ -137,7 +137,7 @@ class FirstLaunchSetupActivity : Activity() {
         addText(downloadCard, "3 · DOWNLOAD HISTORICAL DATASET", 10.5f, muted, true)
         addText(
             downloadCard,
-            "Open-Meteo Best Match · hourly reanalysis · 1 January 2000 to today. The archive is requested in 14-day chunks, saved after each response, and resumes from the latest stored date if a connection fails.",
+            "Open-Meteo Best Match · hourly reanalysis · 1 January 2000 to today. TempLearn downloads one complete CSV file directly to this device, saves it locally, then imports it into the weather database. Pre-training happens only after this step.",
             11.5f, muted, false
         ).apply { setPadding(0, dp(6), 0, dp(9)); setLineSpacing(dp(2).toFloat(), 1f) }
         downloadProgress = progressBar()
@@ -317,37 +317,65 @@ class FirstLaunchSetupActivity : Activity() {
         }
         if (taskRunning) return
         setTaskRunning(true)
-        downloadStatus.text = "Preparing historical download in 14-day chunks…"
+        downloadProgress.isIndeterminate = false
+        downloadProgress.progress = 0
+        downloadStatus.text = "Preparing one complete historical CSV download…"
         worker.execute {
             try {
                 val result = SyncRepository.downloadHistoricalDataset(this, location, profile) { progress ->
                     runOnUiThread {
-                        downloadProgress.progress = progress.percent
-                        downloadStatus.text = String.format(
-                            Locale.getDefault(), "%d%% · %d of %d chunks · %s to %s · %d rows in this chunk",
-                            progress.percent, progress.completedChunks, progress.totalChunks,
-                            progress.chunkStart, progress.chunkEnd, progress.rowsThisChunk
-                        )
+                        val percent = progress.percent
+                        downloadProgress.isIndeterminate = percent < 0
+                        if (percent >= 0) downloadProgress.progress = percent
+                        val processedMb = progress.bytesProcessed / (1024.0 * 1024.0)
+                        val totalMb = progress.totalBytes / (1024.0 * 1024.0)
+                        downloadStatus.text = if (progress.stage == ArchiveProgressStage.DOWNLOADING) {
+                            if (progress.totalBytes > 0L) {
+                                String.format(
+                                    Locale.getDefault(),
+                                    "Downloading one CSV file to this device · %.1f of %.1f MB · %d%%",
+                                    processedMb, totalMb, percent
+                                )
+                            } else {
+                                String.format(
+                                    Locale.getDefault(),
+                                    "Downloading one CSV file to this device · %.1f MB received",
+                                    processedMb
+                                )
+                            }
+                        } else {
+                            String.format(
+                                Locale.getDefault(),
+                                "Importing the saved CSV into the local database · %d%%",
+                                percent.coerceAtLeast(0)
+                            )
+                        }
                     }
                 }
                 runOnUiThread {
                     setTaskRunning(false)
+                    downloadProgress.isIndeterminate = false
                     downloadProgress.progress = 100
-                    downloadStatus.text = "Download complete · " + result.savedReadings + " saved hourly rows · " +
-                        result.importedFromDate + " to " + result.importedToDate + "."
+                    val fileMb = result.localArchiveBytes / (1024.0 * 1024.0)
+                    downloadStatus.text = String.format(
+                        Locale.getDefault(),
+                        "Complete · one CSV saved locally on this device (%.1f MB) · %d hourly rows imported · %s to %s.",
+                        fileMb, result.savedReadings, result.importedFromDate, result.importedToDate
+                    )
                     trainButton.isEnabled = true
                     trainButton.alpha = 1f
-                    trainStatus.text = "Historical dataset is ready. Start pre-training when you are ready."
+                    trainStatus.text = "The local dataset is ready. Pre-training now reads the saved data and makes no weather API request."
                     selectedProfile = result.locationProfile
                 }
             } catch (error: Exception) {
                 runOnUiThread {
                     setTaskRunning(false)
-                    val detail = error.message ?: "check your connection and retry"
+                    downloadProgress.isIndeterminate = false
+                    val detail = error.message ?: "check the connection and device storage, then retry"
                     downloadStatus.text = if (detail.contains("HTTP 429")) {
-                        "HTTP 429 · Open-Meteo rate-limited this request. Completed chunks are saved; wait before retrying. The next attempt resumes from the last stored date."
+                        "Open-Meteo rate-limited the single full-file request (HTTP 429). Wait before retrying; TempLearn will restart the complete file download."
                     } else {
-                        "Download paused/failed: " + detail + ". Completed chunks are saved; retry resumes from the last stored date."
+                        "Download/import failed: " + detail + ". An incomplete transfer is discarded and must restart from the beginning. If the complete CSV was already saved, TempLearn can import that local file without downloading it again."
                     }
                     val key = AppPreferences.activeLocationKey(prefs, location)
                     if (prefs.getBoolean(AppPreferences.historyCompleteKey(key), false)) {

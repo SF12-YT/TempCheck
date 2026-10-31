@@ -1,6 +1,7 @@
 package com.example.tempalearn
 
 import android.content.Context
+import java.io.File
 import java.time.Instant
 import java.time.LocalDate
 import java.time.ZoneId
@@ -31,18 +32,20 @@ object AppPreferences {
     fun latitudeKey(locationKey: String) = "latitude_$locationKey"
     fun longitudeKey(locationKey: String) = "longitude_$locationKey"
     fun elevationKey(locationKey: String) = "elevation_$locationKey"
-    fun historyCompleteKey(locationKey: String) = "open_meteo_history_complete_$locationKey"
+    // New key intentionally forces existing segmented-download installs to create the one-file archive.
+    fun historyCompleteKey(locationKey: String) = "open_meteo_history_file_complete_v1_$locationKey"
 }
 
+enum class ArchiveProgressStage { DOWNLOADING, IMPORTING }
+
 data class ArchiveDownloadProgress(
-    val completedChunks: Int,
-    val totalChunks: Int,
-    val chunkStart: LocalDate,
-    val chunkEnd: LocalDate,
-    val importedRows: Int,
-    val rowsThisChunk: Int
+    val stage: ArchiveProgressStage,
+    val bytesProcessed: Long,
+    val totalBytes: Long
 ) {
-    val percent: Int get() = if (totalChunks <= 0) 100 else (completedChunks * 100 / totalChunks).coerceIn(0, 100)
+    /** -1 means the server did not provide a content length; the UI should stay indeterminate. */
+    val percent: Int
+        get() = if (totalBytes <= 0L) -1 else ((bytesProcessed.coerceAtLeast(0L) * 100L) / totalBytes).toInt().coerceIn(0, 100)
 }
 
 data class DatasetDownloadResult(
@@ -53,7 +56,9 @@ data class DatasetDownloadResult(
     val initialImportCompletedNow: Boolean,
     val importedFromDate: String,
     val importedToDate: String,
-    val locationProfile: LocationProfile
+    val locationProfile: LocationProfile,
+    val localArchivePath: String,
+    val localArchiveBytes: Long
 )
 
 data class TrainingProgress(val percent: Int, val message: String)
@@ -120,34 +125,77 @@ object SyncRepository {
             val zone = ZoneId.of(profile.timezoneId)
             val today = LocalDate.now(zone)
             val completeKey = AppPreferences.historyCompleteKey(locationKey)
-            val initialNeeded = !prefs.getBoolean(completeKey, false)
-            val latest = db.getLatestTimestampSec(locationKey)
-            val latestDate = latest?.let { Instant.ofEpochSecond(it).atZone(zone).toLocalDate() }
-            val start = latestDate ?: if (initialNeeded) LocalDate.of(2000, 1, 1) else today
-            val chunks = dateChunks(start, today, 14)
-            var importedTotal = 0
-
-            chunks.forEachIndexed { index, range ->
-                val count = OpenMeteoClient.fetchHourlyArchive(
-                    profile.latitude, profile.longitude, profile.timezoneId, profile.elevationM,
-                    range.first, range.second
-                ) { batch -> db.insertReadings(locationKey, batch) }
-                importedTotal += count
-                onProgress(
-                    ArchiveDownloadProgress(
-                        completedChunks = index + 1,
-                        totalChunks = chunks.size,
-                        chunkStart = range.first,
-                        chunkEnd = range.second,
-                        importedRows = importedTotal,
-                        rowsThisChunk = count
-                    )
-                )
-                // Keep the public API request cadence conservative during a multi-decade backfill.
-                if (index != chunks.lastIndex) Thread.sleep(1_200L)
+            val archiveDirectory = File(
+                app.filesDir,
+                "historical-datasets/" + locationKey.replace(Regex("[^A-Za-z0-9_-]"), "_")
+            )
+            if (!archiveDirectory.exists() && !archiveDirectory.mkdirs()) {
+                throw java.io.IOException("Could not create the local historical dataset folder.")
             }
 
-            // Set this only after every 14-day response was parsed and committed successfully.
+            // The initial CSV is retained inside TempLearn's private on-device files directory.
+            // Older versions used segmented HTTP responses, so the new completion key forces a
+            // one-time full-file download/import when upgrading from those versions.
+            val archiveFile = File(archiveDirectory, "open_meteo_best_match_2000_present.csv")
+            val initialNeeded = !prefs.getBoolean(completeKey, false) || !archiveFile.isFile || archiveFile.length() <= 0L
+            val latest = db.getLatestTimestampSec(locationKey)
+            val latestDate = latest?.let { Instant.ofEpochSecond(it).atZone(zone).toLocalDate() }
+            val start = if (initialNeeded) LocalDate.of(2000, 1, 1) else (latestDate ?: today)
+            val importFile: File
+
+            if (initialNeeded) {
+                // A previous attempt may have completed the local file but failed while importing.
+                // In that case reuse the complete CSV and do not download it again.
+                if (!archiveFile.isFile || archiveFile.length() <= 0L) {
+                    OpenMeteoClient.downloadHourlyArchiveToFile(
+                        profile.latitude, profile.longitude, profile.timezoneId, profile.elevationM,
+                        start, today, archiveFile
+                    ) { transfer ->
+                        onProgress(
+                            ArchiveDownloadProgress(
+                                ArchiveProgressStage.DOWNLOADING,
+                                transfer.bytesTransferred,
+                                transfer.totalBytes
+                            )
+                        )
+                    }
+                }
+                importFile = archiveFile
+            } else {
+                // Routine refreshes are also single-file, single-request downloads. The long
+                // historical archive remains intact; this small latest-date CSV is imported locally.
+                val latestFile = File(archiveDirectory, "latest_update.csv")
+                OpenMeteoClient.downloadHourlyArchiveToFile(
+                    profile.latitude, profile.longitude, profile.timezoneId, profile.elevationM,
+                    start, today, latestFile
+                ) { transfer ->
+                    onProgress(
+                        ArchiveDownloadProgress(
+                            ArchiveProgressStage.DOWNLOADING,
+                            transfer.bytesTransferred,
+                            transfer.totalBytes
+                        )
+                    )
+                }
+                importFile = latestFile
+            }
+
+            val importedTotal = OpenMeteoClient.importHourlyArchiveFile(
+                importFile,
+                onBatch = { batch -> db.insertReadings(locationKey, batch) },
+                onProgress = { transfer ->
+                    onProgress(
+                        ArchiveDownloadProgress(
+                            ArchiveProgressStage.IMPORTING,
+                            transfer.bytesTransferred,
+                            transfer.totalBytes
+                        )
+                    )
+                }
+            )
+
+            // A dataset is marked ready only after the entire local CSV has been imported.
+            // The first-run CSV is retained as the on-device archive, separate from training.
             if (initialNeeded) prefs.edit().putBoolean(completeKey, true).apply()
             prefs.edit().putLong(AppPreferences.syncTimeKey(locationKey), Instant.now().epochSecond).apply()
             return DatasetDownloadResult(
@@ -158,7 +206,9 @@ object SyncRepository {
                 initialImportCompletedNow = initialNeeded,
                 importedFromDate = start.toString(),
                 importedToDate = today.toString(),
-                locationProfile = profile
+                locationProfile = profile,
+                localArchivePath = archiveFile.absolutePath,
+                localArchiveBytes = archiveFile.length()
             )
         } finally {
             db.close()
@@ -249,19 +299,6 @@ object SyncRepository {
             importedToDate = downloaded.importedToDate,
             locationProfile = downloaded.locationProfile
         )
-    }
-
-    private fun dateChunks(start: LocalDate, end: LocalDate, maximumDays: Long): List<Pair<LocalDate, LocalDate>> {
-        require(maximumDays in 1..14) { "Historical request chunks must not exceed 14 days." }
-        if (end.isBefore(start)) return emptyList()
-        val result = mutableListOf<Pair<LocalDate, LocalDate>>()
-        var cursor = start
-        while (!cursor.isAfter(end)) {
-            val chunkEnd = cursor.plusDays(maximumDays - 1).coerceAtMost(end)
-            result += cursor to chunkEnd
-            cursor = chunkEnd.plusDays(1)
-        }
-        return result
     }
 
     private fun TemperatureDatabase.useCountLocationsSafely(): Int = try {
