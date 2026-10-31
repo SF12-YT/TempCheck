@@ -1,0 +1,84 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:templearn:weather-model:v1",
+  "title": "TempLearn portable weather model v1",
+  "type": "object",
+  "required": [
+    "format",
+    "format_version",
+    "model_scope",
+    "timezone",
+    "temperature_target",
+    "algorithm",
+    "training",
+    "output_transform",
+    "inference_contract",
+    "timezone_policy",
+    "feature_count",
+    "feature_schema",
+    "weights",
+    "coefficients"
+  ],
+  "properties": {
+    "format": { "const": "templearn-weather-model" },
+    "format_version": { "const": 1 },
+    "exported_at_unix_seconds": { "type": "integer" },
+    "model_scope": { "enum": ["location", "shared"] },
+    "location_label": { "type": "string" },
+    "timezone": { "type": "string" },
+    "temperature_target": {
+      "type": "object",
+      "required": ["name", "unit", "sole_observation_source"],
+      "properties": {
+        "name": { "const": "next_hour_air_temperature" },
+        "unit": { "const": "degrees_celsius" },
+        "sole_observation_source": { "const": "BOM" }
+      },
+      "additionalProperties": true
+    },
+    "algorithm": { "type": "object" },
+    "training": { "type": "object" },
+    "output_transform": { "type": "object" },
+    "inference_contract": { "type": "object" },
+    "timezone_policy": { "type": "string" },
+    "reference_inference": { "type": "string" },
+    "feature_count": { "const": 46 },
+    "feature_schema": {
+      "type": "array",
+      "minItems": 46,
+      "maxItems": 46,
+      "items": {
+        "type": "object",
+        "required": ["index", "name", "expression", "description"],
+        "properties": {
+          "index": { "type": "integer", "minimum": 0, "maximum": 45 },
+          "name": { "type": "string" },
+          "expression": { "type": "string" },
+          "description": { "type": "string" }
+        },
+        "additionalProperties": true
+      }
+    },
+    "weights": {
+      "type": "array",
+      "minItems": 46,
+      "maxItems": 46,
+      "items": { "type": "number" }
+    },
+    "coefficients": {
+      "type": "array",
+      "minItems": 46,
+      "maxItems": 46,
+      "items": {
+        "type": "object",
+        "required": ["index", "feature", "weight"],
+        "properties": {
+          "index": { "type": "integer", "minimum": 0, "maximum": 45 },
+          "feature": { "type": "string" },
+          "weight": { "type": "number" }
+        }
+      }
+    }
+  },
+  "additionalProperties": true
+}
