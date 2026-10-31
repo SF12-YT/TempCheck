@@ -125,6 +125,9 @@ object SyncRepository {
 
             val zone = ZoneId.of(profile.timezoneId)
             val today = LocalDate.now(zone)
+            // The Historical Weather API does not accept the current UTC date yet.
+            // Cap the requested end date at yesterday UTC (and never beyond local today).
+            val archiveEndDate = minOf(today, LocalDate.now(ZoneId.of("UTC")).minusDays(1))
             val completeKey = AppPreferences.historyCompleteKey(locationKey)
             val archiveDirectory = File(
                 app.filesDir,
@@ -141,7 +144,9 @@ object SyncRepository {
             val initialNeeded = !prefs.getBoolean(completeKey, false) || !archiveFile.isFile || archiveFile.length() <= 0L
             val latest = db.getLatestTimestampSec(locationKey)
             val latestDate = latest?.let { Instant.ofEpochSecond(it).atZone(zone).toLocalDate() }
-            val start = if (initialNeeded) LocalDate.of(2000, 1, 1) else (latestDate ?: today)
+            // Existing data may include today's station readings; never let that push the
+            // Open-Meteo archive start beyond its currently available end date.
+            val start = if (initialNeeded) LocalDate.of(2000, 1, 1) else minOf(latestDate ?: archiveEndDate, archiveEndDate)
             val importFile: File
 
             if (initialNeeded) {
@@ -150,7 +155,7 @@ object SyncRepository {
                 if (!archiveFile.isFile || archiveFile.length() <= 0L) {
                     OpenMeteoClient.downloadHourlyArchiveToFile(
                         profile.latitude, profile.longitude, profile.timezoneId, profile.elevationM,
-                        start, today, archiveFile
+                        start, archiveEndDate, archiveFile
                     ) { transfer ->
                         onProgress(
                             ArchiveDownloadProgress(
@@ -168,7 +173,7 @@ object SyncRepository {
                 val latestFile = File(archiveDirectory, "latest_update.csv")
                 OpenMeteoClient.downloadHourlyArchiveToFile(
                     profile.latitude, profile.longitude, profile.timezoneId, profile.elevationM,
-                    start, today, latestFile
+                    start, archiveEndDate, latestFile
                 ) { transfer ->
                     onProgress(
                         ArchiveDownloadProgress(
@@ -206,7 +211,7 @@ object SyncRepository {
                 initialHistoryComplete = prefs.getBoolean(completeKey, false),
                 initialImportCompletedNow = initialNeeded,
                 importedFromDate = start.toString(),
-                importedToDate = today.toString(),
+                importedToDate = archiveEndDate.toString(),
                 locationProfile = profile,
                 localArchivePath = archiveFile.absolutePath,
                 localArchiveBytes = archiveFile.length()
