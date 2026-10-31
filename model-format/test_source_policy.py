@@ -44,9 +44,12 @@ class SourcePolicyTests(unittest.TestCase):
     def test_first_import_is_one_time_then_updates_incrementally(self):
         sync = (KOTLIN / "SyncRepository.kt").read_text(encoding="utf-8")
         self.assertIn("historyCompleteKey", sync)
-        self.assertIn("LocalDate.of(2000,1,1)", sync)
+        self.assertIn("LocalDate.of(2000, 1, 1)", sync)
         self.assertIn("getLatestTimestampSec", sync)
         self.assertIn("OpenMeteoClient.fetchHourlyArchive", sync)
+        self.assertIn("dateChunks(start, today, 14)", sync)
+        self.assertIn("fun downloadHistoricalDataset", sync)
+        self.assertIn("fun pretrainHistoricalDataset", sync)
         self.assertNotIn("BomClient", sync)
         self.assertNotIn("fetchPreviousDailyContext", sync)
 
@@ -83,9 +86,32 @@ class SourcePolicyTests(unittest.TestCase):
             self.assertIn(f'"{field}"', client)
         self.assertIn("Several places match", client)
 
-    def test_retired_bom_adapter_is_not_in_project(self):
-        self.assertFalse((KOTLIN / "BomClient.kt").exists())
-        self.assertNotIn("BOM", (KOTLIN / "SyncRepository.kt").read_text(encoding="utf-8"))
+    def test_bom_station_observations_are_separate_from_training_targets(self):
+        self.assertTrue((KOTLIN / "BomClient.kt").exists())
+        database = (KOTLIN / "TemperatureDatabase.kt").read_text(encoding="utf-8")
+        insert_body = database.split("fun insertReadings", 1)[1].split("fun ", 1)[0]
+        self.assertIn("it.temperatureSource == OpenMeteoClient.SOURCE", insert_body)
+        activity_path = KOTLIN / "FirstLaunchSetupActivity.kt"
+        if activity_path.exists():
+            self.assertIn("BOM station", activity_path.read_text(encoding="utf-8"))
+        self.assertIn("preferredStationWmoId", (KOTLIN / "BomClient.kt").read_text(encoding="utf-8"))
+
+    def test_first_launch_separates_download_and_pretraining(self):
+        activity_path = KOTLIN / "FirstLaunchSetupActivity.kt"
+        if activity_path.exists():
+            activity = activity_path.read_text(encoding="utf-8")
+            self.assertIn("Download historical dataset", activity)
+            self.assertIn("Pre-train with historical dataset", activity)
+            self.assertIn("Automatic · nearest suitable reporting station", activity)
+            self.assertIn("Manual · choose a station", activity)
+            self.assertIn("SyncRepository.downloadHistoricalDataset", activity)
+            self.assertIn("SyncRepository.pretrainHistoricalDataset", activity)
+
+    def test_archive_retries_rate_limits(self):
+        client = (KOTLIN / "OpenMeteoClient.kt").read_text(encoding="utf-8")
+        self.assertIn('code == 429 || code in 500..599', client)
+        self.assertIn('getHeaderField("Retry-After")', client)
+        self.assertIn('MAX_RETRIES = 4', client)
 
 
 if __name__ == "__main__":

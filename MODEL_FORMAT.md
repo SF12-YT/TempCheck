@@ -120,6 +120,8 @@ Numeric missing weather features are normalized to zero after centring/scaling. 
 
 ## Data provenance and limitations
 
+The Android app downloads the archive in date windows of no more than 14 days, saves each completed window to SQLite and exposes a separate local pre-training action. Pre-training consumes the saved archive; it does not call the weather API. Australian BOM station observations may be displayed separately as an optional automatic or manually selected reference station, but they are never admitted as model training targets or blended into the archive.
+
 Open-Meteo Best Match is a reanalysis product, not a station observation. Best Match combines available model products with different spatial resolutions and historical coverage; the available underlying model can vary across time. Some variables are not available for every product or period. TempLearn stores unavailable values as null and never fills them from another provider.
 
 The model predicts the next hour in the same Best Match series it was trained on. Its held-out metrics therefore describe performance within that reanalysis dataset, not independent agreement with a physical weather station or future real-world forecast skill. It is intended for experimental short-horizon temperature learning, not as an official forecast or safety instrument.

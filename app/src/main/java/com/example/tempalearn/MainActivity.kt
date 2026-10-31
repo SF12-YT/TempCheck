@@ -83,6 +83,11 @@ class MainActivity : Activity() {
             prefs.edit().putString(AppPreferences.KEY_LOCATION, AppPreferences.DEFAULT_LOCATION).apply()
         }
         NotificationHelper.createChannel(this)
+        if (!prefs.getBoolean(AppPreferences.KEY_INITIAL_SETUP_COMPLETE, false)) {
+            startActivity(Intent(this, FirstLaunchSetupActivity::class.java))
+            finish()
+            return
+        }
         buildInterface()
         uiBuilt = true
         scheduleDailySync()

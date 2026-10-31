@@ -7,6 +7,8 @@ import java.net.URL
 import java.net.URLEncoder
 import java.time.LocalDate
 import java.time.ZoneId
+import java.time.ZonedDateTime
+import java.time.format.DateTimeFormatter
 import java.util.zip.GZIPInputStream
 
 /** Open-Meteo Best Match hourly archive client. CSV is parsed as a stream, not a giant JSON array. */
@@ -50,28 +52,76 @@ object OpenMeteoClient {
         require(longitude.isFinite() && longitude in -180.0..180.0)
         require(!endDate.isBefore(startDate)) { "The archive end date precedes its start date." }
         ZoneId.of(timezoneId)
-        val timezone=URLEncoder.encode(timezoneId,Charsets.UTF_8.name())
-        val elevation=elevationM?.takeIf{it.isFinite()}?.let{"&elevation=$it"}.orEmpty()
-        val url=URL("https://archive-api.open-meteo.com/v1/archive?latitude=$latitude&longitude=$longitude$elevation" +
-            "&start_date=$startDate&end_date=$endDate&hourly=${hourlyFields.joinToString(",")}&models=best_match" +
-            "&timezone=$timezone&timeformat=unixtime&temperature_unit=celsius&wind_speed_unit=kmh" +
-            "&precipitation_unit=mm&format=csv")
-        val connection=(url.openConnection() as HttpURLConnection).apply{
-            requestMethod="GET";connectTimeout=30_000;readTimeout=600_000
-            setRequestProperty("Accept","text/csv")
-            setRequestProperty("Accept-Encoding","gzip")
-            setRequestProperty("User-Agent","TempLearn-Android/0.8.0")
-        }
-        try{
-            val code=connection.responseCode
-            if(code !in 200..299){
-                val detail=connection.errorStream?.bufferedReader(Charsets.UTF_8)?.use{it.readText()}.orEmpty()
-                throw IOException("Open-Meteo Historical Weather returned HTTP $code: ${detail.take(500)}")
+        val timezone = URLEncoder.encode(timezoneId, Charsets.UTF_8.name())
+        val elevation = elevationM?.takeIf { it.isFinite() }?.let { "&elevation=$it" }.orEmpty()
+        val url = URL(
+            "https://archive-api.open-meteo.com/v1/archive?latitude=$latitude&longitude=$longitude$elevation" +
+                "&start_date=$startDate&end_date=$endDate&hourly=${hourlyFields.joinToString(",")}&models=best_match" +
+                "&timezone=$timezone&timeformat=unixtime&temperature_unit=celsius&wind_speed_unit=kmh" +
+                "&precipitation_unit=mm&format=csv"
+        )
+
+        var lastError: IOException? = null
+        for (attempt in 0..MAX_RETRIES) {
+            val connection = (url.openConnection() as HttpURLConnection).apply {
+                requestMethod = "GET"
+                connectTimeout = 30_000
+                readTimeout = 180_000
+                setRequestProperty("Accept", "text/csv")
+                setRequestProperty("Accept-Encoding", "gzip")
+                setRequestProperty("User-Agent", "TempLearn-Android/0.9.0")
             }
-            val input=connection.inputStream
-            val decoded=if(connection.contentEncoding.equals("gzip",true)) GZIPInputStream(input) else input
-            return decoded.bufferedReader(Charsets.UTF_8).use{parseCsv(it,onBatch)}
-        }finally{connection.disconnect()}
+            try {
+                val code = connection.responseCode
+                if (code !in 200..299) {
+                    val retryAfter = connection.getHeaderField("Retry-After")
+                    val detail = connection.errorStream?.bufferedReader(Charsets.UTF_8)?.use { it.readText() }.orEmpty()
+                    val error = IOException("Open-Meteo Historical Weather returned HTTP $code: ${detail.take(350)}")
+                    val retryable = code == 429 || code in 500..599
+                    if (!retryable || attempt == MAX_RETRIES) throw error
+                    lastError = error
+                    val waitMs = retryDelayMillis(retryAfter, attempt)
+                    connection.disconnect()
+                    sleepBeforeRetry(waitMs)
+                    continue
+                }
+                val input = connection.inputStream
+                val decoded = if (connection.contentEncoding.equals("gzip", true)) GZIPInputStream(input) else input
+                return decoded.bufferedReader(Charsets.UTF_8).use { parseCsv(it, onBatch) }
+            } catch (error: IOException) {
+                if (attempt == MAX_RETRIES || error.message?.contains("HTTP 4") == true && error.message?.contains("HTTP 429") != true) throw error
+                lastError = error
+                val waitMs = (BASE_RETRY_DELAY_MS * (1L shl attempt)).coerceAtMost(60_000L)
+                sleepBeforeRetry(waitMs)
+            } finally {
+                connection.disconnect()
+            }
+        }
+        throw lastError ?: IOException("Open-Meteo archive request failed after retries.")
+    }
+
+    private fun retryDelayMillis(retryAfter: String?, attempt: Int): Long {
+        retryAfter?.toLongOrNull()?.let { seconds ->
+            return (seconds * 1_000L).coerceIn(1_000L, MAX_RETRY_DELAY_MS)
+        }
+        if (!retryAfter.isNullOrBlank()) {
+            val serverTime = runCatching {
+                ZonedDateTime.parse(retryAfter, DateTimeFormatter.RFC_1123_DATE_TIME).toInstant().toEpochMilli()
+            }.getOrNull()
+            if (serverTime != null) {
+                return (serverTime - System.currentTimeMillis()).coerceIn(1_000L, MAX_RETRY_DELAY_MS)
+            }
+        }
+        return (BASE_RETRY_DELAY_MS * (1L shl attempt)).coerceAtMost(MAX_RETRY_DELAY_MS)
+    }
+
+    private fun sleepBeforeRetry(waitMs: Long) {
+        try {
+            Thread.sleep(waitMs)
+        } catch (interrupted: InterruptedException) {
+            Thread.currentThread().interrupt()
+            throw IOException("The historical download was interrupted.", interrupted)
+        }
     }
 
     private fun parseCsv(reader:BufferedReader,onBatch:(List<HourlyTemperature>)->Unit):Int{
@@ -161,7 +211,7 @@ object OpenMeteoClient {
         val connection=(url.openConnection() as HttpURLConnection).apply{
             requestMethod="GET";connectTimeout=12_000;readTimeout=18_000
             setRequestProperty("Accept","application/json")
-            setRequestProperty("User-Agent","TempLearn-Android/0.8.0")
+            setRequestProperty("User-Agent","TempLearn-Android/0.9.0")
         }
         try{
             val code=connection.responseCode
@@ -173,5 +223,8 @@ object OpenMeteoClient {
             return values.optDouble(0,Double.NaN).takeIf{it.isFinite()}
         }finally{connection.disconnect()}
     }
+    private const val MAX_RETRIES = 4
+    private const val BASE_RETRY_DELAY_MS = 5_000L
+    private const val MAX_RETRY_DELAY_MS = 300_000L
     const val SOURCE="OPEN_METEO_BEST_MATCH"
 }
