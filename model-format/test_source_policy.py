@@ -124,6 +124,16 @@ class SourcePolicyTests(unittest.TestCase):
         self.assertIn("KEY_ONE_FILE_ARCHIVE_SETUP_COMPLETE", main_activity)
         self.assertIn("KEY_ONE_FILE_ARCHIVE_SETUP_COMPLETE", (KOTLIN / "SyncRepository.kt").read_text(encoding="utf-8"))
 
+    def test_same_repository_pull_requests_build_a_signed_release_apk(self):
+        workflow = (ROOT / ".github/workflows/android.yml").read_text(encoding="utf-8")
+        trusted_pr = "github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository"
+        fork_only = "github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository"
+        self.assertEqual(workflow.count("if: " + trusted_pr), 3)
+        self.assertEqual(workflow.count("if: " + fork_only), 2)
+        self.assertIn("ANDROID_KEYSTORE_BASE64: \${{ secrets.ANDROID_KEYSTORE_BASE64 }}", workflow)
+        self.assertIn("run: gradle --no-daemon assembleRelease", workflow)
+        self.assertIn("run: gradle --no-daemon assembleDebug", workflow)
+
     def test_archive_retries_rate_limits(self):
         client = (KOTLIN / "OpenMeteoClient.kt").read_text(encoding="utf-8")
         self.assertIn('code == 429 || code in 500..599', client)
