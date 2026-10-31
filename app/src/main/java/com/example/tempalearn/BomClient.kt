@@ -40,11 +40,22 @@ object BomClient {
     data class Result(
         val stationName: String,
         val distanceKm: Double,
+        val stationWmoId: String,
         /** Top-of-hour observations keyed by the exact local-hour Unix timestamp. */
         val observationsByHour: Map<Long, HourlyObservation>
     ) {
         val temperaturesByHour: Map<Long, Double>
             get() = observationsByHour.mapValues { it.value.temperatureC }
+    }
+
+    data class StationChoice(
+        val wmoId: String,
+        val name: String,
+        val latitude: Double,
+        val longitude: Double,
+        val distanceKm: Double
+    ) {
+        fun label(): String = String.format(Locale.getDefault(), "%s · WMO %s · %.1f km", name, wmoId, distanceKm)
     }
 
     private data class Station(
@@ -59,11 +70,28 @@ object BomClient {
     private val compactUtc = DateTimeFormatter.ofPattern("yyyyMMddHHmmss", Locale.ROOT)
 
     /** Returns null where BOM has no supported Australian feed, usable station, or recent temperatures. */
+    fun listNearbyStations(
+        latitude: Double,
+        longitude: Double,
+        locationText: String,
+        maximumDistanceKm: Double = MAX_STATION_DISTANCE_KM
+    ): List<StationChoice> {
+        val statePrefix = statePrefix(locationText, latitude, longitude) ?: return emptyList()
+        return runCatching { fetchStationIndex(statePrefix) }.getOrNull().orEmpty()
+            .filter { it.latitude.isFinite() && it.longitude.isFinite() && it.wmoId.matches(Regex("\\d{5}")) }
+            .distinctBy { it.wmoId }
+            .map { StationChoice(it.wmoId, it.name.ifBlank { it.wmoId }, it.latitude, it.longitude,
+                distanceKm(latitude, longitude, it.latitude, it.longitude)) }
+            .filter { it.distanceKm <= maximumDistanceKm }
+            .sortedBy { it.distanceKm }
+    }
+
     fun fetchRecentObservations(
         latitude: Double,
         longitude: Double,
         locationText: String,
-        timezoneId: String
+        timezoneId: String,
+        preferredStationWmoId: String? = null
     ): Result? {
         val statePrefix = statePrefix(locationText, latitude, longitude) ?: return null
         val stations = runCatching { fetchStationIndex(statePrefix) }.getOrNull().orEmpty()
@@ -76,6 +104,7 @@ object BomClient {
         // coverage, rather than blindly accepting the nearest station's sparse SYNOP data.
         val candidates = stations
             .filter { it.latitude.isFinite() && it.longitude.isFinite() && it.wmoId.matches(Regex("\\d{5}")) }
+            .filter { preferredStationWmoId.isNullOrBlank() || it.wmoId == preferredStationWmoId }
             .distinctBy { it.wmoId }
             .map { it to distanceKm(latitude, longitude, it.latitude, it.longitude) }
             .filter { it.second <= MAX_STATION_DISTANCE_KM }
@@ -94,6 +123,7 @@ object BomClient {
                 return Result(
                     stationName = station.name.ifBlank { station.wmoId },
                     distanceKm = distance,
+                    stationWmoId = station.wmoId,
                     observationsByHour = feed.observationsByHour
                 )
             }
@@ -114,6 +144,7 @@ object BomClient {
             return Result(
                 stationName = it.station.name.ifBlank { it.station.wmoId },
                 distanceKm = it.distanceKm,
+                stationWmoId = it.station.wmoId,
                 observationsByHour = it.feed.observationsByHour
             )
         }
@@ -128,7 +159,7 @@ object BomClient {
         val currentTemperature = station.currentTemperatureC
         if (hour != null && currentTemperature != null) {
             return Result(
-                station.name.ifBlank { station.wmoId }, distance,
+                station.name.ifBlank { station.wmoId }, distance, station.wmoId,
                 mapOf(hour to HourlyObservation(temperatureC = currentTemperature))
             )
         }

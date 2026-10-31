@@ -14,12 +14,12 @@ class ReferencePredictorTests(unittest.TestCase):
         self.location = {"latitude": -33.7198, "longitude": 150.3074, "elevation_m": 1000.0}
         self.model = {
             "format": "templearn-weather-model",
-            "format_version": 2,
+            "format_version": 3,
             "model_scope": "location",
             "timezone": "Australia/Sydney",
             "default_location": self.location,
-            "weights": [0.0] * 53,
-            "feature_count": 53,
+            "weights": [0.0] * 62,
+            "feature_count": 62,
             "feature_schema": [{"index": index, "name": name} for index, name in enumerate(EXPECTED_FEATURES)],
         }
 
@@ -31,7 +31,7 @@ class ReferencePredictorTests(unittest.TestCase):
             "Australia/Sydney",
             self.location,
         )
-        self.assertEqual(len(vector), 53)
+        self.assertEqual(len(vector), 62)
         self.assertTrue(all(isinstance(value, float) for value in vector))
 
     def test_zero_weights_return_baseline(self):
@@ -48,7 +48,7 @@ class ReferencePredictorTests(unittest.TestCase):
             {"latitude": 51.5072, "longitude": -0.1276, "elevation_m": 11},
         )
         self.assertNotEqual(a[46:], b[46:])
-        self.assertEqual(a[50], 1.0)
+        self.assertEqual(a[59], 1.0)
 
     def test_missing_elevation_has_explicit_flag(self):
         vector = build_feature_vector(
@@ -58,8 +58,8 @@ class ReferencePredictorTests(unittest.TestCase):
             "Australia/Sydney",
             {"latitude": -33.7, "longitude": 150.3},
         )
-        self.assertEqual(vector[49], 0.0)
-        self.assertEqual(vector[50], 0.0)
+        self.assertEqual(vector[58], 0.0)
+        self.assertEqual(vector[59], 0.0)
 
     def test_shared_model_requires_target_location_and_timezone(self):
         shared = dict(self.model)
@@ -69,7 +69,7 @@ class ReferencePredictorTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             predict_next_hour(shared, self.latest + 3600, self.history, {})
 
-    def test_rejects_nonconsecutive_bom_history(self):
+    def test_rejects_nonconsecutive_open_meteo_history(self):
         broken = [self.history[0], self.history[1], {
             "timestamp_unix_seconds": self.latest - 5400,
             "temperature_c": 20.7,

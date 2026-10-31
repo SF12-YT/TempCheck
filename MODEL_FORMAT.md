@@ -1,143 +1,127 @@
-# TempLearn portable model package — format version 2
+# TempLearn portable model package — format version 3
 
-TempLearn exports a ZIP bundle intended to be loaded by another application without TempLearn's Android app, local SQLite database, or API credentials. The bundle includes the complete inference state and reference code for inference and retraining.
+TempLearn exports a ZIP bundle for use by another application without requiring the Android app, its SQLite database, API credentials or network access for inference.
 
 ## Package contents
 
-- `model.json`: model architecture, fitted coefficients, ordered feature schema, preprocessing, source policy, saved location profiles, training coverage and validation results. `training.contributing_location_count` is the actual number used for fitting.
-- `feature_schema.json`: machine-readable ordered feature schema.
+- `model.json`: architecture, fitted coefficients, ordered feature schema, preprocessing, source policy, saved locations, training coverage and validation results.
+- `feature_schema.json`: machine-readable ordered 62-feature schema.
 - `inference.py`: standard-library Python inference implementation and CLI.
-- `trainer.py`: standard-library reference ridge-regression trainer for new BOM JSONL data.
-- `inference_contract.json`: inference requirements and provenance rules.
-- `training_metadata.json` and `evaluation.json`: training coverage and held-out evaluation.
-- `MODEL_CARD.md`: human-readable summary, intended use and limitations.
-- `README.md` and `requirements.txt`.
+- `trainer.py`: standard-library ridge-regression trainer for Open-Meteo Best Match JSONL data.
+- `inference_contract.json`, `training_metadata.json`, `evaluation.json`, `MODEL_CARD.md`, `README.md` and `requirements.txt`.
 
 ## Compatibility
 
-- `format`: `templearn-weather-model`
-- `format_version`: `2`
-- `feature_count`: exactly `53`
-- `weights`: exactly 53 finite floating-point values, in the exact order of `feature_schema`
-- `feature_schema`: 53 objects with sequential `index` values 0–52 and the feature `name`
-- `coefficients`: the same weights repeated as named/indexed entries
+| Property | Required value |
+|---|---|
+| `format` | `templearn-weather-model` |
+| `format_version` | `3` |
+| `feature_count` | `62` |
+| `weights` | 62 finite floats in exact feature order |
+| `feature_schema` | 62 entries with sequential indices 0–61 |
 
-Reject unknown format versions, missing/reordered features, or any coefficient count other than 53. Do not assume later versions preserve v2 feature ordering.
+Reject unknown format versions, missing/reordered features or any coefficient count other than 62.
 
 ## Inference contract
 
 Supply:
 
-1. `target_timestamp_unix_seconds`: Unix timestamp of the target local top-of-hour prediction.
-2. Three consecutive BOM hourly observations, newest first (`t1`, `t2`, `t3`). `t1` must be exactly 3,600 seconds before the target. Earlier observations must each be 3,600 seconds apart.
-3. Weather variables for the latest completed hour (`t1`), all originating from that same BOM station observation. Missing fields may be omitted. Never fill them with another provider.
+1. `target_timestamp_unix_seconds`: Unix timestamp of the target hour.
+2. Exactly three consecutive preceding Open-Meteo Best Match hourly records, newest first. The newest must be 3,600 seconds before the target; the previous two records must each be 3,600 seconds apart.
+3. Weather values for the latest preceding hour from the same location and Open-Meteo Best Match archive series. Missing predictors can be omitted. Do not substitute another provider.
 4. The target location's IANA timezone.
-5. Geographic context: latitude and longitude in WGS84 degrees, plus optional elevation above mean sea level in metres.
+5. Geographic context: WGS84 latitude/longitude and optional elevation in metres.
 
-A location-specific model includes a `default_location`, so its coordinates, elevation and timezone can be used when the request omits them. A shared model must be given the target location's coordinates and timezone explicitly. Elevation is optional; when missing, the model uses the documented mean-imputation value and an explicit `elevation_present=0` feature.
+A location-specific model carries a default timezone and location. A shared model must be given the target location's timezone and coordinates explicitly.
 
-Example request JSON:
+Example:
 
 ```json
 {
   "target_timestamp_unix_seconds": 1800003600,
   "timezone": "Australia/Sydney",
-  "location": {"latitude": -33.7198, "longitude": 150.3074, "elevation_m": 1000},
-  "previous_bom_hours": [
+  "location": {"latitude": -33.6153, "longitude": 150.2665, "elevation_m": 1080},
+  "previous_open_meteo_hours": [
     {"timestamp_unix_seconds": 1800000000, "temperature_c": 21.8},
     {"timestamp_unix_seconds": 1799996400, "temperature_c": 21.2},
     {"timestamp_unix_seconds": 1799992800, "temperature_c": 20.7}
   ],
-  "weather": {"humidity_pct": 55, "wind_speed_kmh": 12, "weather_code": 2}
+  "weather": {
+    "humidity_pct": 55,
+    "wind_speed_kmh": 12,
+    "weather_code": 2,
+    "boundary_layer_height_m": 900
+  }
 }
 ```
 
-Run `python inference.py model.json request.json`. The script prints `{"prediction_c": ...}`. No network access or third-party Python package is required.
+Run `python inference.py model.json request.json`. The script prints a JSON object containing `prediction_c`.
 
-## Input weather keys and units
+## Weather input keys and units
 
-All keys are optional. Every supplied historic weather value must come from BOM for the same station/hour as `t1`.
+Values are for the most recent preceding hour. All are Open-Meteo Best Match variables.
 
 | Input key | Unit |
 |---|---|
-| `dew_point_c`, `wet_bulb_temperature_c`, `apparent_temperature_c` | °C |
-| `wind_speed_kmh`, `wind_gust_kmh` | km/h |
+| `dew_point_c`, `wet_bulb_temperature_c`, `apparent_temperature_c`, `soil_temperature_0_to_7cm_c` | °C |
+| `wind_speed_kmh`, `wind_gust_kmh`, `wind_speed_100m_kmh` | km/h |
 | `pressure_hpa`, `surface_pressure_hpa` | hPa |
 | `humidity_pct`, `cloud_cover_pct`, `cloud_low_pct`, `cloud_mid_pct`, `cloud_high_pct` | % |
-| `precipitation_mm`, `rain_mm`, `showers_mm` | mm |
-| `solar_radiation_wm2`, `solar_radiation_instant_wm2` | W/m² |
-| `wind_direction_deg` | Degrees clockwise from north, 0–360 |
-| `vapor_pressure_deficit_kpa` | kPa |
+| `precipitation_mm`, `rain_mm` | mm |
 | `snowfall_cm` | cm |
-| `visibility_m` | m |
-| `evapotranspiration_mm`, `et0_mm` | mm |
-| `uv_index`, `uv_index_clear_sky` | Index |
+| `snow_depth_m`, `boundary_layer_height_m` | m |
+| `soil_moisture_0_to_7cm` | m³/m³ |
+| `solar_radiation_wm2`, `direct_radiation_wm2`, `diffuse_radiation_wm2` | W/m² |
+| `wind_direction_deg`, `wind_direction_100m_deg` | Degrees clockwise from north |
 | `weather_code` | WMO code integer |
 
-Coordinates are in degrees; elevation is metres above mean sea level.
+Some legacy feature slots remain in the ordered model schema but are not among the 27 requested fields; their corresponding values are therefore null in TempLearn's dataset and are mean-imputed during feature normalization. This does not insert a value into the stored observation.
 
-## Feature order and transforms
+## Training input
 
-Let `norm(x,c,s) = clamp((x-c)/s,-4,4)`; missing/non-finite numeric values become zero. Let `h` be the target's local hour, `d` its day of year, `D` the number of days in that year, and `t1`, `t2`, `t3` the three previous BOM temperatures, newest first. Let `solar = norm(solar_radiation_wm2,150,300)`, `cloud = norm(cloud_cover_pct,50,50)`, and `daylight = max(0,-cos(2πh/24))`. Let `lat = clamp(latitude/90,-1,1)` and longitude be converted to radians.
+The reference trainer accepts JSON Lines with one hourly Open-Meteo Best Match record per line. Each row must include:
 
-| # | Feature | Formula |
-|---:|---|---|
-| 0 | `bias` | `1` |
-| 1 | `local_hour_sin` | `sin(2πh/24)` |
-| 2 | `local_hour_cos` | `cos(2πh/24)` |
-| 3 | `day_of_year_sin` | `sin(2π(d-1)/D)` |
-| 4 | `day_of_year_cos` | `cos(2π(d-1)/D)` |
-| 5–7 | `temperature_t1`, `temperature_t2`, `temperature_t3` | `(t-20)/10` |
-| 8 | `dew_point` | `norm(dew_point_c,20,10)` |
-| 9 | `wind_speed` | `norm(wind_speed_kmh,15,15)` |
-| 10 | `wind_gust` | `norm(wind_gust_kmh,25,25)` |
-| 11 | `mean_sea_level_pressure` | `norm(pressure_hpa,1013,20)` |
-| 12 | `relative_humidity` | `norm(humidity_pct,50,50)` |
-| 13 | `cloud_cover_total` | `cloud` |
-| 14 | `precipitation` | `norm(precipitation_mm,0.5,2)` |
-| 15 | `shortwave_radiation` | `solar` |
-| 16–17 | `temperature_trend_1`, `temperature_trend_2` | `clamp((t1-t2)/5,-4,4)`, `clamp((t2-t3)/5,-4,4)` |
-| 18–19 | `solar_daylight_interaction`, `cloud_daylight_interaction` | `solar*daylight`, `cloud*daylight` |
-| 20–22 | `cloud_cover_low`, `cloud_cover_mid`, `cloud_cover_high` | `norm(cloud_layer_pct,50,50)` |
-| 23–24 | `wind_direction_sin`, `wind_direction_cos` | `sin(direction_rad)`, `cos(direction_rad)`; both zero if missing |
-| 25 | `vapour_pressure_deficit` | `norm(vapor_pressure_deficit_kpa,1,1)` |
-| 26 | `surface_pressure` | `norm(surface_pressure_hpa,1000,20)` |
-| 27 | `rain` | `norm(rain_mm,0.2,1)` |
-| 28 | `showers` | `norm(showers_mm,0.1,0.5)` |
-| 29 | `snowfall` | `norm(snowfall_cm,0,1)` |
-| 30 | `visibility` | `norm(visibility_m,10000,10000)` |
-| 31 | `evapotranspiration` | `norm(evapotranspiration_mm,0.1,0.5)` |
-| 32 | `reference_et0` | `norm(et0_mm,0.1,0.5)` |
-| 33 | `uv_index` | `norm(uv_index,3,3)` |
-| 34 | `uv_index_clear_sky` | `norm(uv_index_clear_sky,3,3)` |
-| 35 | `wet_bulb_temperature` | `norm(wet_bulb_temperature_c,20,10)` |
-| 36 | `apparent_temperature` | `norm(apparent_temperature_c,20,10)` |
-| 37 | `shortwave_radiation_instant` | `norm(solar_radiation_instant_wm2,150,300)` |
-| 38–45 | WMO condition flags | One-hot flags for clear, partly cloudy, fog, drizzle, rain, snow, rain showers, thunderstorm |
-| 46 | `latitude_normalized` | `lat` |
-| 47 | `longitude_sin` | `sin(longitude_rad)` |
-| 48 | `longitude_cos` | `cos(longitude_rad)` |
-| 49 | `elevation_normalized` | `norm(elevation_m,500,1000)` |
-| 50 | `elevation_present` | `1` if elevation is known, else `0` |
-| 51 | `latitude_season_sin` | `lat*sin(year_angle)` |
-| 52 | `latitude_season_cos` | `lat*cos(year_angle)` |
+- `location_key`
+- `timestamp_unix_seconds`
+- `temperature_c`
+- `temperature_source="OPEN_METEO_BEST_MATCH"`
+- `weather_source="OPEN_METEO_BEST_MATCH"`
+- `timezone`, `latitude`, `longitude`
+- optional `elevation_m`
+- optional `weather` object containing the keys above
 
-The output is `clamp(20 + 10 * dot(weights, features), -90, 70)` Celsius.
+The trainer rejects incorrectly labelled sources, nonconsecutive hours and a missing/reordered v3 feature schema.
 
-## Training implementation
+```bash
+python trainer.py model.json open_meteo_training.jsonl updated_model.json
+```
 
-`trainer.py` accepts JSON Lines with one BOM observation per line. Each row has `location_key`, `timestamp_unix_seconds`, `temperature_c`, `temperature_source` (must explicitly be `BOM`), `weather_source` (must explicitly be `BOM`), `timezone`, `latitude`, `longitude`, optional `elevation_m`, and optional `weather` object containing the keys above. The source fields are required even when the weather object is empty; the trainer rejects unlabelled or mixed-provider rows. Rows for each location are sorted by timestamp; incomplete/nonconsecutive hour sequences are skipped. The last 20% per location is held out chronologically. The trainer applies the same feature builder and ridge-regression gradient-descent configuration documented in `model.json` and writes an updated model JSON.
+## 62-feature ordering
 
-Example command: `python trainer.py model.json bom_training.jsonl updated_model.json`.
+The 62-vector retains the original 53 feature positions and appends nine features before the weather-code category flags:
 
-## Provider boundaries
+| Index | Feature |
+|---:|---|
+| 38 | `snow_depth` |
+| 39 | `direct_radiation` |
+| 40 | `diffuse_radiation` |
+| 41 | `boundary_layer_height` |
+| 42 | `wind_speed_100m` |
+| 43 | `wind_direction_100m_sin` |
+| 44 | `wind_direction_100m_cos` |
+| 45 | `soil_temperature_0_7cm` |
+| 46 | `soil_moisture_0_7cm` |
+| 47–54 | Weather-code category flags |
+| 55–61 | Latitude, cyclic longitude, elevation, elevation availability and latitude/season interactions |
 
-- **BOM:** exclusive source for historical hourly air-temperature targets and historical hourly predictors used by the model. Missing observations remain missing.
-- **Open-Meteo Weather:** previous completed local-day non-temperature aggregates only (`past_days=1`, `forecast_days=0`). Stored separately and not currently model features.
-- **Open-Meteo Geocoding:** place identity, coordinates, elevation and timezone; these are geographic features, not weather observations.
-- **Open-Meteo Elevation:** fallback terrain elevation using the 90 m global DEM if the geocoder supplies no elevation.
-- **Visual Crossing:** not queried in TempLearn 0.7.0.
+Wet-bulb temperature was already represented in the original 53 features. The original 53 feature positions remain unchanged so the extra variables are additive and the Android learner, exported inference and trainer use an identical order.
 
-## Evaluation caveat
+Numeric missing weather features are normalized to zero after centring/scaling. This is a model preprocessing rule only: missing dataset cells remain null. Training examples are formed only where four consecutive hourly temperatures are present.
 
-Validation uses a chronological held-out portion of stored examples, separately for each contributing location. It is a useful diagnostic, not a guarantee of future forecast accuracy. Station representativeness, data gaps, unseen weather regimes and the distribution of training locations all affect performance. TempLearn 0.7.0's historical target source is BOM, whose observation network is Australian; geocoding a place elsewhere does not create temperature observations for it.
+## Data provenance and limitations
+
+The Android app downloads the archive in date windows of no more than 14 days, saves each completed window to SQLite and exposes a separate local pre-training action. Pre-training consumes the saved archive; it does not call the weather API. Australian BOM station observations may be displayed separately as an optional automatic or manually selected reference station, but they are never admitted as model training targets or blended into the archive.
+
+Open-Meteo Best Match is a reanalysis product, not a station observation. Best Match combines available model products with different spatial resolutions and historical coverage; the available underlying model can vary across time. Some variables are not available for every product or period. TempLearn stores unavailable values as null and never fills them from another provider.
+
+The model predicts the next hour in the same Best Match series it was trained on. Its held-out metrics therefore describe performance within that reanalysis dataset, not independent agreement with a physical weather station or future real-world forecast skill. It is intended for experimental short-horizon temperature learning, not as an official forecast or safety instrument.

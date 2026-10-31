@@ -83,6 +83,11 @@ class MainActivity : Activity() {
             prefs.edit().putString(AppPreferences.KEY_LOCATION, AppPreferences.DEFAULT_LOCATION).apply()
         }
         NotificationHelper.createChannel(this)
+        if (!prefs.getBoolean(AppPreferences.KEY_INITIAL_SETUP_COMPLETE, false)) {
+            startActivity(Intent(this, FirstLaunchSetupActivity::class.java))
+            finish()
+            return
+        }
         buildInterface()
         uiBuilt = true
         scheduleDailySync()
@@ -232,7 +237,7 @@ class MainActivity : Activity() {
         historyRows = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         historyCard.addView(historyRows, LinearLayout.LayoutParams(-1, -2))
 
-        val attribution = "Historical observations and all historical training predictors: BOM station only. Missing BOM fields remain missing; no other provider fills historical readings. Open-Meteo supplies previous-completed-day non-temperature daily context only (past_days=1, forecast_days=0), stored separately and never merged into BOM training history. Open-Meteo Geocoding and Elevation supply location metadata only. Weather data by Open-Meteo.com (CC BY 4.0). BOM's anonymous feeds are for personal, non-commercial use. Validation uses later unseen hours and is not a guarantee of forecast accuracy."
+        val attribution = "Historical hourly temperature targets and predictors: Open-Meteo Historical Weather API, Best Match reanalysis. Missing values remain missing; no other provider fills them. The initial history is imported from 1 January 2000 once per location, then only the latest local date is refreshed. Weather data by Open-Meteo.com (CC BY 4.0). Reanalysis is modelled historical weather, not a local station observation. Validation uses later unseen hours and is not a guarantee of forecast accuracy."
         addText(content, attribution, 11f, mutedColor, false).apply {
             val attributedText = android.text.SpannableString(attribution)
             val providerStart = attribution.indexOf("Open-Meteo.com")
@@ -284,7 +289,7 @@ class MainActivity : Activity() {
         }
         addText(
             content,
-            "Search for a postcode, town or address, then choose the matching place. TempLearn saves its coordinates, elevation and timezone and keeps each location's BOM history and local model separate.",
+            "Search for a postcode, town or address, then choose the matching place. TempLearn saves its coordinates, elevation and timezone and keeps each location's Open-Meteo history and local model separate.",
             14f,
             mutedColor,
             false
@@ -301,7 +306,7 @@ class MainActivity : Activity() {
         locationCard.addView(locationInput, LinearLayout.LayoutParams(-1, dp(50)).apply { topMargin = dp(9) })
         addText(
             locationCard,
-            "Examples: 2780, NSW, Australia · Katoomba, NSW, Australia · Perth, WA, Australia. Geocoding supplies the canonical coordinates, elevation and timezone. BOM supplies hourly training observations; Open-Meteo's daily aggregates remain separate.",
+            "Examples: 2780, NSW, Australia · Katoomba, NSW, Australia · Perth, WA, Australia. Geocoding supplies the canonical coordinates, elevation and timezone. Open-Meteo Best Match supplies all 27 hourly training variables.",
             12f,
             mutedColor,
             false
@@ -332,7 +337,7 @@ class MainActivity : Activity() {
         addText(modelCard, "PORTABLE MACHINE-LEARNING MODEL", 11f, mutedColor, true)
         addText(
             modelCard,
-            "Export a complete, portable model package: learned parameters, 53-feature schema, preprocessing, ridge-regression algorithm, inference contract, Python inference and training code, evaluation metrics, training coverage and geographic metadata. It opens independently of TempLearn and contains no API keys or raw hourly history.",
+            "Export a complete, portable model package: learned parameters, 62-feature schema, preprocessing, ridge-regression algorithm, inference contract, Python inference and training code, evaluation metrics, training coverage and geographic metadata. It opens independently of TempLearn and contains no API keys or raw hourly history.",
             12f,
             mutedColor,
             false
@@ -455,12 +460,12 @@ class MainActivity : Activity() {
                 AppPreferences.timezoneKey(locationKey),
                 ZoneId.systemDefault().id
             ) ?: ZoneId.systemDefault().id)
-            val all = db.getAllReadings(locationKey)
+            val all = db.getLatestReadings(locationKey, 72)
             val recent = all.takeLast(24)
             val model = db.getModel(locationKey)
             val sharedModel = db.getModel(AppPreferences.SHARED_MODEL_KEY)
             chartView.setReadings(recent)
-            storedCountText.text = all.size.toString()
+            storedCountText.text = db.getSavedCount(locationKey).toString()
             trainingCountText.text = model?.trainingExamples?.toString() ?: "0"
             val effectiveModelForMetrics = model ?: sharedModel?.takeIf { profile != null }
             if (effectiveModelForMetrics != null && effectiveModelForMetrics.validationExamples > 0 && effectiveModelForMetrics.validationMaeC.isFinite()) {
@@ -493,7 +498,7 @@ class MainActivity : Activity() {
             }
 
             // A newly selected place can borrow the shared geographical model immediately;
-            // once enough local BOM history exists, its locally adapted model takes precedence.
+            // once enough local hourly history exists, its locally adapted model takes precedence.
             val predictionModel = model ?: sharedModel?.takeIf { profile != null }
             val predicted = predictionModel?.let {
                 WeatherLearner.predictNext(all, it, zoneId, profile?.modelContext() ?: ModelLocationContext())
@@ -588,7 +593,7 @@ class MainActivity : Activity() {
         reading.et0Mm?.let { parts += String.format(Locale.getDefault(), "ET₀ %.2f mm", it) }
         reading.uvIndex?.let { parts += String.format(Locale.getDefault(), "UV %.1f", it) }
         reading.weatherCode?.let { parts += "WMO $it" }
-        parts += "Air temperature: BOM"
+        parts += "Air temperature: Open-Meteo Best Match"
         return parts.joinToString(" · ")
     }
 
@@ -603,7 +608,7 @@ class MainActivity : Activity() {
         syncInProgress = true
         syncButton.isEnabled = false
         syncButton.alpha = 0.7f
-        statusText.text = "Fetching BOM observations and previous-day Open-Meteo daily context…"
+        statusText.text = "Fetching Open-Meteo Best Match hourly history…"
         executor.execute {
             try {
                 val result = SyncRepository.sync(this, location)
@@ -611,13 +616,11 @@ class MainActivity : Activity() {
                     syncInProgress = false
                     syncButton.isEnabled = true
                     syncButton.alpha = 1f
-                    val windowText = "BOM's latest approximately 72-hour observation window"
-                    val bomText = if (result.bomAppliedHours > 0) {
-                        "BOM-only history: ${result.bomAppliedHours} hourly observations from ${result.bomStationName ?: "nearby station"} (${String.format(Locale.getDefault(), "%.0f", result.bomDistanceKm ?: 0.0)} km)"
-                    } else "No new BOM observations; no other provider was substituted"
-                    val dailyContextText = if (result.openMeteoAvailable) {
-                        "Open-Meteo previous-day daily context: ${result.openMeteoDailyDays} completed daily record(s); no forecasts or temperature values imported"
-                    } else "Open-Meteo previous-day daily context unavailable; BOM history remains independent"
+                    val importText = if (result.initialImportCompletedNow) {
+                        "Initial 2000-present Open-Meteo hourly archive imported"
+                    } else {
+                        "Latest-date Open-Meteo hourly refresh completed"
+                    }
                     val geoText = String.format(
                         Locale.getDefault(),
                         "%.4f°, %.4f° · %s m elevation",
@@ -626,7 +629,7 @@ class MainActivity : Activity() {
                         result.locationProfile.elevationM?.let { String.format(Locale.getDefault(), "%.0f", it) } ?: "unknown"
                     )
                     locationSummaryText.text = result.resolvedAddress
-                    statusText.text = "${result.resolvedAddress} ($geoText): $windowText · $bomText · $dailyContextText · ${result.trainingExamples} local examples · ${result.savedReadings} BOM hours saved."
+                    statusText.text = "${result.resolvedAddress} ($geoText): $importText · ${result.fetchedHours} fetched/updated hourly rows · ${result.trainingExamples} local training examples · ${result.savedReadings} stored hourly records."
                     NotificationHelper.showSyncSuccess(this, result, source = if (manual) "manual" else "automatic")
                     refreshDashboard()
                 }
@@ -756,7 +759,7 @@ class MainActivity : Activity() {
             val safeName = (profile?.name ?: location).lowercase(Locale.ROOT)
                 .replace(Regex("[^a-z0-9]+"), "_").trim('_').take(36).ifBlank { "location" }
             pendingModelExportZip = zipBytes
-            pendingModelExportFilename = if (shared) "templearn_shared_model_v2.zip" else "templearn_${safeName}_model_v2.zip"
+            pendingModelExportFilename = if (shared) "templearn_shared_model_v3.zip" else "templearn_${safeName}_model_v3.zip"
             val intent = Intent(Intent.ACTION_CREATE_DOCUMENT).apply {
                 addCategory(Intent.CATEGORY_OPENABLE)
                 type = "application/zip"
@@ -775,7 +778,7 @@ class MainActivity : Activity() {
         if (requestCode != REQUEST_EXPORT_MODEL) return
         val zipBytes = pendingModelExportZip
         pendingModelExportZip = null
-        val filename = pendingModelExportFilename ?: "templearn_model_v2.zip"
+        val filename = pendingModelExportFilename ?: "templearn_model_v3.zip"
         pendingModelExportFilename = null
         val uri = data?.data
         if (resultCode != RESULT_OK || uri == null || zipBytes == null) return
