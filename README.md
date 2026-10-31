@@ -93,7 +93,7 @@ Run locally:
 ./gradlew --no-daemon assembleDebug
 ```
 
-The GitHub Actions workflow runs the Python model/source regression tests and builds the Android APK. It also publishes a `TempLearn-source-project` ZIP artifact that includes the GitHub Actions workflow and Gradle wrapper. Pull-request builds use the debug APK; signed release builds require the configured Android signing secrets.
+The GitHub Actions workflow runs the Python model/source regression tests and builds the Android APK. It also publishes a `TempLearn-source-project` ZIP artifact that includes the GitHub Actions workflow and Gradle wrapper. **Same-repository pull requests also build and publish a signed release APK using the configured `ANDROID_KEYSTORE_BASE64`, `ANDROID_KEYSTORE_PASSWORD`, `ANDROID_KEY_ALIAS` and `ANDROID_KEY_PASSWORD` secrets.** Pull requests from forks cannot access repository secrets on GitHub, so those builds use an unsigned debug APK instead. Push and manual workflow-dispatch builds continue to produce the signed release APK.
 
 ## Attribution
 
