@@ -128,7 +128,7 @@ class SourcePolicyTests(unittest.TestCase):
         workflow = (ROOT / ".github/workflows/android.yml").read_text(encoding="utf-8")
         trusted_pr = "github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository"
         fork_only = "github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository"
-        self.assertEqual(workflow.count("if: " + trusted_pr), 3)
+        self.assertEqual(workflow.count("if: " + trusted_pr), 4)
         self.assertEqual(workflow.count("if: " + fork_only), 2)
         self.assertIn("ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}", workflow)
         self.assertIn("run: gradle --no-daemon assembleRelease", workflow)
