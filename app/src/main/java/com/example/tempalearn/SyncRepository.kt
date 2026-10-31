@@ -206,10 +206,10 @@ object SyncRepository {
                 locationContext = profile.modelContext()
             )
             if (local != null) db.saveModel(locationKey, local)
-            onProgress(82, "Fitting the cross-location model…")
+            onProgress(TrainingProgress(82, "Fitting the cross-location model…"))
             val shared = WeatherLearner.trainShared(series, locationContexts = contexts)
             if (shared != null) db.saveModel(AppPreferences.SHARED_MODEL_KEY, shared)
-            onProgress(100, if (local != null) "Pre-training complete." else "Not enough valid hourly examples to fit a model yet.")
+            onProgress(TrainingProgress(100, if (local != null) "Pre-training complete." else "Not enough valid hourly examples to fit a model yet."))
             return TrainingResult(
                 locationKey = locationKey,
                 trainingExamples = local?.trainingExamples ?: 0,

@@ -67,7 +67,7 @@ class FirstLaunchSetupActivity : Activity() {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(20), dp(24), dp(20), dp(32))
         }
-        scroll.addView(page, ScrollView.LayoutParams(-1, -2))
+        scroll.addView(page, -1, -2)
         setContentView(scroll)
 
         addText(page, "T E M P L E A R N · FIRST-TIME SETUP", 10.5f, green, true)
