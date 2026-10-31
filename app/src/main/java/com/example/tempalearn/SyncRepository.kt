@@ -15,7 +15,7 @@ object AppPreferences {
     const val SHARED_MODEL_KEY = "__templearn_shared_weather_model__"
     const val KEY_NOTIFICATION_PERMISSION_REQUESTED = "notification_permission_requested"
     const val KEY_INITIAL_SETUP_COMPLETE = "initial_setup_complete_v2"
-    const val KEY_ONE_FILE_ARCHIVE_SETUP_COMPLETE = "one_file_archive_setup_complete_v1"
+    const val KEY_ONE_FILE_ARCHIVE_SETUP_COMPLETE = "one_file_archive_setup_complete_v2"
     const val KEY_STATION_MODE = "bom_station_mode"
     const val KEY_STATION_WMO_ID = "bom_station_wmo_id"
     const val KEY_STATION_NAME = "bom_station_name"
@@ -33,8 +33,8 @@ object AppPreferences {
     fun latitudeKey(locationKey: String) = "latitude_$locationKey"
     fun longitudeKey(locationKey: String) = "longitude_$locationKey"
     fun elevationKey(locationKey: String) = "elevation_$locationKey"
-    // New key intentionally forces existing segmented-download installs to create the one-file archive.
-    fun historyCompleteKey(locationKey: String) = "open_meteo_history_file_complete_v1_$locationKey"
+    // v2 forces a one-time re-download because earlier releases stored 27 hourly fields.
+    fun historyCompleteKey(locationKey: String) = "open_meteo_history_file_complete_v2_$locationKey"
 }
 
 enum class ArchiveProgressStage { DOWNLOADING, IMPORTING }
@@ -140,7 +140,7 @@ object SyncRepository {
             // The initial CSV is retained inside TempLearn's private on-device files directory.
             // Older versions used segmented HTTP responses, so the new completion key forces a
             // one-time full-file download/import when upgrading from those versions.
-            val archiveFile = File(archiveDirectory, "open_meteo_best_match_2000_present.csv")
+            val archiveFile = File(archiveDirectory, "open_meteo_best_match_2000_present_v2.csv")
             val initialNeeded = !prefs.getBoolean(completeKey, false) || !archiveFile.isFile || archiveFile.length() <= 0L
             val latest = db.getLatestTimestampSec(locationKey)
             val latestDate = latest?.let { Instant.ofEpochSecond(it).atZone(zone).toLocalDate() }
@@ -202,7 +202,11 @@ object SyncRepository {
 
             // A dataset is marked ready only after the entire local CSV has been imported.
             // The first-run CSV is retained as the on-device archive, separate from training.
-            if (initialNeeded) prefs.edit().putBoolean(completeKey, true).apply()
+            if (initialNeeded) {
+                prefs.edit().putBoolean(completeKey, true).apply()
+                // The 15-field archive is safely imported; now remove the previous 27-field CSV.
+                File(archiveDirectory, "open_meteo_best_match_2000_present.csv").delete()
+            }
             prefs.edit().putLong(AppPreferences.syncTimeKey(locationKey), Instant.now().epochSecond).apply()
             return DatasetDownloadResult(
                 locationKey = locationKey,

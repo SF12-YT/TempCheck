@@ -26,32 +26,20 @@ data class ArchiveFileProgress(val bytesTransferred: Long, val totalBytes: Long)
 object OpenMeteoClient {
     private val hourlyFields = listOf(
         "temperature_2m",
-        "apparent_temperature",
         "relative_humidity_2m",
         "dew_point_2m",
         "precipitation",
         "rain",
         "snowfall",
-        "snow_depth",
         "weather_code",
         "cloud_cover",
         "cloud_cover_low",
         "cloud_cover_mid",
         "cloud_cover_high",
-        "surface_pressure",
         "pressure_msl",
         "wind_speed_10m",
-        "wind_direction_10m",
         "wind_gusts_10m",
-        "shortwave_radiation",
-        "direct_radiation",
-        "diffuse_radiation",
-        "wet_bulb_temperature_2m",
-        "boundary_layer_height",
-        "wind_speed_100m",
-        "wind_direction_100m",
-        "soil_temperature_0_to_7cm",
-        "soil_moisture_0_to_7cm"
+        "shortwave_radiation"
     )
 
     /**
@@ -96,7 +84,7 @@ object OpenMeteoClient {
                 setRequestProperty("Accept", "text/csv")
                 // Keep the saved file directly usable as a CSV and make byte progress meaningful.
                 setRequestProperty("Accept-Encoding", "identity")
-                setRequestProperty("User-Agent", "TempLearn-Android/0.9.1")
+                setRequestProperty("User-Agent", "TempLearn-Android/0.9.3")
             }
             try {
                 val code = connection.responseCode
@@ -209,7 +197,7 @@ object OpenMeteoClient {
             found
         }
         if (!validHeader) {
-            throw IOException("The downloaded CSV is incomplete or has no hourly header with all 27 requested fields.")
+            throw IOException("The downloaded CSV is incomplete or has no hourly header containing all 15 requested fields.")
         }
     }
 
@@ -266,32 +254,20 @@ object OpenMeteoClient {
             batch += HourlyTemperature(
                 timestampSec = timestamp,
                 temperatureC = temperature,
-                apparentTemperatureC = cells.numberAt(indices, "apparent_temperature"),
                 humidityPct = cells.numberAt(indices, "relative_humidity_2m"),
                 dewPointC = cells.numberAt(indices, "dew_point_2m"),
                 precipitationMm = cells.numberAt(indices, "precipitation"),
                 rainMm = cells.numberAt(indices, "rain"),
                 snowfallCm = cells.numberAt(indices, "snowfall"),
-                snowDepthM = cells.numberAt(indices, "snow_depth"),
                 weatherCode = cells.numberAt(indices, "weather_code")?.toInt(),
                 cloudCoverPct = cells.numberAt(indices, "cloud_cover"),
                 cloudLowPct = cells.numberAt(indices, "cloud_cover_low"),
                 cloudMidPct = cells.numberAt(indices, "cloud_cover_mid"),
                 cloudHighPct = cells.numberAt(indices, "cloud_cover_high"),
-                surfacePressureHpa = cells.numberAt(indices, "surface_pressure"),
                 pressureHpa = cells.numberAt(indices, "pressure_msl"),
                 windSpeedKmh = cells.numberAt(indices, "wind_speed_10m"),
-                windDirectionDeg = cells.numberAt(indices, "wind_direction_10m"),
                 windGustKmh = cells.numberAt(indices, "wind_gusts_10m"),
                 solarRadiationWm2 = cells.numberAt(indices, "shortwave_radiation"),
-                directRadiationWm2 = cells.numberAt(indices, "direct_radiation"),
-                diffuseRadiationWm2 = cells.numberAt(indices, "diffuse_radiation"),
-                wetBulbTemperatureC = cells.numberAt(indices, "wet_bulb_temperature_2m"),
-                boundaryLayerHeightM = cells.numberAt(indices, "boundary_layer_height"),
-                windSpeed100mKmh = cells.numberAt(indices, "wind_speed_100m"),
-                windDirection100mDeg = cells.numberAt(indices, "wind_direction_100m"),
-                soilTemperatureC = cells.numberAt(indices, "soil_temperature_0_to_7cm"),
-                soilMoisture0To7cm = cells.numberAt(indices, "soil_moisture_0_to_7cm"),
                 temperatureSource = SOURCE
             )
             imported++
@@ -365,7 +341,7 @@ object OpenMeteoClient {
         val connection=(url.openConnection() as HttpURLConnection).apply{
             requestMethod="GET";connectTimeout=12_000;readTimeout=18_000
             setRequestProperty("Accept","application/json")
-            setRequestProperty("User-Agent","TempLearn-Android/0.9.1")
+            setRequestProperty("User-Agent","TempLearn-Android/0.9.3")
         }
         try{
             val code=connection.responseCode

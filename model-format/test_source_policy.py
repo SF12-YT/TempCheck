@@ -10,18 +10,15 @@ KOTLIN = ROOT / "app/src/main/java/com/example/tempalearn"
 ASSETS = ROOT / "app/src/main/assets/model-package"
 
 HOURLY_FIELDS = (
-    "temperature_2m", "apparent_temperature", "relative_humidity_2m", "dew_point_2m",
-    "precipitation", "rain", "snowfall", "snow_depth", "weather_code", "cloud_cover",
-    "cloud_cover_low", "cloud_cover_mid", "cloud_cover_high", "surface_pressure",
-    "pressure_msl", "wind_speed_10m", "wind_direction_10m", "wind_gusts_10m",
-    "shortwave_radiation", "direct_radiation", "diffuse_radiation",
-    "wet_bulb_temperature_2m", "boundary_layer_height", "wind_speed_100m",
-    "wind_direction_100m", "soil_temperature_0_to_7cm", "soil_moisture_0_to_7cm",
+    "temperature_2m", "relative_humidity_2m", "dew_point_2m", "precipitation",
+    "rain", "snowfall", "weather_code", "cloud_cover", "cloud_cover_low",
+    "cloud_cover_mid", "cloud_cover_high", "pressure_msl", "wind_speed_10m",
+    "wind_gusts_10m", "shortwave_radiation",
 )
 
 
 class SourcePolicyTests(unittest.TestCase):
-    def test_archive_uses_exact_27_hourly_fields_and_best_match(self):
+    def test_archive_uses_exact_15_hourly_fields_and_best_match(self):
         client = (KOTLIN / "OpenMeteoClient.kt").read_text(encoding="utf-8")
         self.assertIn("models=best_match", client)
         self.assertIn("format=csv", client)
@@ -32,7 +29,7 @@ class SourcePolicyTests(unittest.TestCase):
         end = client.index("    )", start)
         selected = re.findall(r'"([a-z0-9_]+)"', client[start:end])
         self.assertEqual(tuple(selected), HOURLY_FIELDS)
-        self.assertEqual(len(selected), 27)
+        self.assertEqual(len(selected), 15)
 
     def test_archive_streams_csv_and_preserves_missing_fields(self):
         client = (KOTLIN / "OpenMeteoClient.kt").read_text(encoding="utf-8")
@@ -50,7 +47,9 @@ class SourcePolicyTests(unittest.TestCase):
         self.assertIn("getLatestTimestampSec", sync)
         self.assertIn("OpenMeteoClient.downloadHourlyArchiveToFile", sync)
         self.assertIn("OpenMeteoClient.importHourlyArchiveFile", sync)
-        self.assertIn("open_meteo_best_match_2000_present.csv", sync)
+        self.assertIn("open_meteo_best_match_2000_present_v2.csv", sync)
+        self.assertIn("history_file_complete_v2", sync)
+        self.assertIn('KEY_ONE_FILE_ARCHIVE_SETUP_COMPLETE = "one_file_archive_setup_complete_v2"', sync)
         self.assertNotIn("dateChunks", sync)
         self.assertNotIn("fetchHourlyArchive(", sync)
         self.assertIn("fun downloadHistoricalDataset", sync)

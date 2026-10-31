@@ -1,6 +1,6 @@
 # TempLearn — Open-Meteo hourly weather learning app
 
-TempLearn imports historical hourly weather from the **Open-Meteo Historical Weather API using Best Match**, stores it locally and trains a next-hour air-temperature model on-device. This release is **0.9.2**.
+TempLearn imports historical hourly weather from the **Open-Meteo Historical Weather API using Best Match**, stores it locally and trains a next-hour air-temperature model on-device. This release is **0.9.3**.
 
 ## Data source and import strategy
 
@@ -8,45 +8,31 @@ Open-Meteo Best Match is the only source used for the full historical machine-le
 
 On first launch, TempLearn presents one setup page with separate actions to download the historical dataset and then pre-train the model. For each saved location, the complete **2000-01-01 through the latest available archive date** history is requested with one Historical Weather API HTTP request and delivered as one CSV response. TempLearn saves that complete CSV to its private on-device files directory before importing any readings into SQLite. Once the file is safely saved and its header is validated, it is imported locally in 256-row database batches. The CSV remains on the device as the original archive. If the connection fails before the file is complete, the partial `.part` file is discarded and the full one-file download must be retried from the beginning; if the complete file was saved but import failed, the next attempt reuses that local CSV without downloading it again. HTTP 429 and transient 5xx responses respect `Retry-After` when supplied and otherwise use exponential backoff. The subsequent pre-training button reads the imported local database and makes no weather API request. Existing 0.9.0 installations are shown this dataset-setup page once after upgrading so they can create the new local CSV archive; choosing “Do this later” dismisses the migration prompt without repeating it on every launch.
 
-Although it is one HTTP request, Open-Meteo's published quota rules weight requests that cover more than 14 days and more than 10 weather variables as multiple API-call units. The one-time 2000-present request for 27 variables is approximately **1,900 quota-equivalent calls** for one location, based on the current date range. The free tier currently lists 10,000 calls per day and 300,000 per month; adding many locations in one day can therefore use a significant share of the daily allowance. The request is deliberately not split into multiple HTTP downloads.
+Although it is one HTTP request, Open-Meteo's published quota rules weight requests that cover more than 14 days and more than 10 weather variables as multiple API-call units. The one-time 2000-present request for 15 variables is approximately **1,050 quota-equivalent calls** for one location, based on the current date range. The free tier currently lists 10,000 calls per day and 300,000 per month; adding many locations in one day can therefore use a significant share of the daily allowance. The request is deliberately not split into multiple HTTP downloads.
 
 Pre-training is a separate button on the same setup page. It trains from the historical rows already stored on the phone and makes **no weather API requests**. The page displays independent download and training progress. Setup can be completed or postponed; users can return to downloading or training later through the normal refresh workflow.
 
 Subsequent syncs request from the latest stored date through the latest date currently accepted by the Historical Weather API. TempLearn caps `end_date` at yesterday UTC rather than sending today's date, which the API rejects; it also clamps the start date so it cannot exceed the end date. The latest available day is refreshed and any days missed while the app was offline are filled. The full 2000-present archive is not requested again. The Archive API accepts date ranges rather than an hourly cursor, so the latest stored date is intentionally re-read and upserted by timestamp. TempLearn requests hourly variables only; it does not request daily aggregates or a forecast feed.
 
-## The 27 hourly variables
+## The 15 hourly variables
 
 | # | API variable | Unit | Why it is retained |
 |---:|---|---|---|
 | 1 | `temperature_2m` | °C | Air-temperature learning target |
-| 2 | `apparent_temperature` | °C | Combined apparent/feels-like temperature |
-| 3 | `relative_humidity_2m` | % | Near-surface moisture |
-| 4 | `dew_point_2m` | °C | Near-surface water-vapour state |
-| 5 | `precipitation` | mm | Total preceding-hour precipitation |
-| 6 | `rain` | mm | Liquid precipitation component |
-| 7 | `snowfall` | cm | Preceding-hour snowfall |
-| 8 | `snow_depth` | m | Snow cover on the ground |
-| 9 | `weather_code` | WMO code | Broad weather-condition category |
-| 10 | `cloud_cover` | % | Total cloud amount |
-| 11 | `cloud_cover_low` | % | Low cloud layer |
-| 12 | `cloud_cover_mid` | % | Middle cloud layer |
-| 13 | `cloud_cover_high` | % | High cloud layer |
-| 14 | `surface_pressure` | hPa | Pressure at the local surface |
-| 15 | `pressure_msl` | hPa | Mean sea-level pressure |
-| 16 | `wind_speed_10m` | km/h | Standard 10 m wind speed |
-| 17 | `wind_direction_10m` | ° | Standard 10 m wind direction |
-| 18 | `wind_gusts_10m` | km/h | 10 m wind gusts |
-| 19 | `shortwave_radiation` | W/m² | Global shortwave radiation |
-| 20 | `direct_radiation` | W/m² | Direct solar radiation |
-| 21 | `diffuse_radiation` | W/m² | Diffuse solar radiation |
-| 22 | `wet_bulb_temperature_2m` | °C | Humidity-sensitive thermal state |
-| 23 | `boundary_layer_height` | m | Atmospheric mixing-layer depth |
-| 24 | `wind_speed_100m` | km/h | Wind above the surface layer |
-| 25 | `wind_direction_100m` | ° | Upper-level wind direction |
-| 26 | `soil_temperature_0_to_7cm` | °C | Shallow ground thermal state |
-| 27 | `soil_moisture_0_to_7cm` | m³/m³ | Shallow ground water content |
-
-Wet-bulb temperature was already present in the earlier feature set; it remains part of the 27-variable request. Boundary-layer height, 100 m wind, and shallow-soil variables add information about atmospheric mixing, vertical wind structure and ground conditions. Snow depth and direct/diffuse radiation are also now retained as training features.
+| 2 | `relative_humidity_2m` | % | Near-surface moisture |
+| 3 | `dew_point_2m` | °C | Near-surface water-vapour state |
+| 4 | `precipitation` | mm | Total preceding-hour precipitation |
+| 5 | `rain` | mm | Liquid precipitation component |
+| 6 | `snowfall` | cm | Preceding-hour snowfall |
+| 7 | `weather_code` | WMO code | Broad weather-condition category |
+| 8 | `cloud_cover` | % | Total cloud amount |
+| 9 | `cloud_cover_low` | % | Low cloud layer |
+| 10 | `cloud_cover_mid` | % | Middle cloud layer |
+| 11 | `cloud_cover_high` | % | High cloud layer |
+| 12 | `pressure_msl` | hPa | Mean sea-level pressure |
+| 13 | `wind_speed_10m` | km/h | Standard 10 m wind speed |
+| 14 | `wind_gusts_10m` | km/h | 10 m wind gusts |
+| 15 | `shortwave_radiation` | W/m² | Global shortwave radiation |
 
 **Missing values remain missing.** The app never substitutes another provider, interpolates an absent hour or invents an air-temperature target. Some variables are unavailable in some underlying reanalysis products or periods; those cells remain null. A row without a valid `temperature_2m` value is not inserted as a training target.
 

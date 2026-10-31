@@ -3,9 +3,9 @@ name: Build TempLearn Android APK
 on:
   workflow_dispatch:
   push:
-    branches: [main, master]
+    branches: [main, master, templearn-openmeteo-v0.8.0]
   pull_request:
-    branches: [main, master]
+    branches: [main, master, templearn-openmeteo-v0.8.0]
 
 permissions:
   contents: read
