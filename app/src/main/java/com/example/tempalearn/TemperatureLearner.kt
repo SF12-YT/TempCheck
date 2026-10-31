@@ -26,7 +26,7 @@ data class ModelLocationContext(
  * prior without mixing their stored reading histories.
  */
 object WeatherLearner {
-    const val WEIGHT_COUNT = 53
+    const val WEIGHT_COUNT = 62
     private const val BASE_TEMP_C = 20.0
     private const val TEMP_SCALE_C = 10.0
     private const val MAX_EXAMPLES_PER_LOCATION = 4_000
@@ -223,6 +223,15 @@ object WeatherLearner {
             latest.wetBulbTemperatureC.normalized(center = BASE_TEMP_C, scale = TEMP_SCALE_C), // 36
             latest.apparentTemperatureC.normalized(center = BASE_TEMP_C, scale = TEMP_SCALE_C), // 37
             latest.solarRadiationInstantWm2.normalized(center = 150.0, scale = 300.0), // 38
+            latest.snowDepthM.normalized(center = 0.01, scale = 0.1),
+            latest.directRadiationWm2.normalized(center = 100.0, scale = 200.0),
+            latest.diffuseRadiationWm2.normalized(center = 50.0, scale = 100.0),
+            latest.boundaryLayerHeightM.normalized(center = 1_000.0, scale = 1_500.0),
+            latest.windSpeed100mKmh.normalized(center = 20.0, scale = 20.0),
+            if (latest.windDirection100mDeg == null) 0.0 else sin(Math.toRadians(latest.windDirection100mDeg)),
+            if (latest.windDirection100mDeg == null) 0.0 else cos(Math.toRadians(latest.windDirection100mDeg)),
+            latest.soilTemperatureC.normalized(center = BASE_TEMP_C, scale = TEMP_SCALE_C),
+            latest.soilMoisture0To7cm.normalized(center = 0.25, scale = 0.25),
             if (weatherCode == 0) 1.0 else 0.0, // 39 clear
             if (weatherCode != null && weatherCode in 1..3) 1.0 else 0.0, // 40 partly/cloudy
             if (weatherCode == 45 || weatherCode == 48) 1.0 else 0.0, // 41 fog

@@ -46,12 +46,18 @@ class TemperatureDatabase(context: Context) : SQLiteOpenHelper(
                 wet_bulb_temperature_c REAL,
                 apparent_temperature_c REAL,
                 shortwave_radiation_instant_wm2 REAL,
-                temperature_source TEXT NOT NULL DEFAULT 'BOM',
+                snow_depth_m REAL,
+                direct_radiation_wm2 REAL,
+                diffuse_radiation_wm2 REAL,
+                boundary_layer_height_m REAL,
+                wind_speed_100m_kmh REAL,
+                wind_direction_100m_deg REAL,
+                soil_moisture_0_7cm REAL,
+                temperature_source TEXT NOT NULL DEFAULT 'OPEN_METEO_BEST_MATCH',
                 PRIMARY KEY(location_key, timestamp_sec)
             )""".trimIndent()
         )
         db.execSQL("CREATE INDEX readings_location_time ON readings(location_key, timestamp_sec)")
-        createDailyWeatherTable(db)
         createLocationProfilesTable(db)
         createModelStateTable(db)
     }
@@ -268,11 +274,26 @@ class TemperatureDatabase(context: Context) : SQLiteOpenHelper(
             // models cannot be applied to the new 53-feature schema; raw BOM readings are kept.
             db.execSQL("DELETE FROM model_state")
         }
+        if (oldVersion < 12) {
+            // Switch the entire training source to Open-Meteo Best Match. Never relabel old BOM
+            // records as reanalysis; keep location profiles and rebuild weather/model history.
+            db.execSQL("ALTER TABLE readings ADD COLUMN snow_depth_m REAL")
+            db.execSQL("ALTER TABLE readings ADD COLUMN direct_radiation_wm2 REAL")
+            db.execSQL("ALTER TABLE readings ADD COLUMN diffuse_radiation_wm2 REAL")
+            db.execSQL("ALTER TABLE readings ADD COLUMN boundary_layer_height_m REAL")
+            db.execSQL("ALTER TABLE readings ADD COLUMN wind_speed_100m_kmh REAL")
+            db.execSQL("ALTER TABLE readings ADD COLUMN wind_direction_100m_deg REAL")
+            db.execSQL("ALTER TABLE readings ADD COLUMN soil_moisture_0_7cm REAL")
+            db.execSQL("DELETE FROM readings")
+            db.execSQL("DELETE FROM model_state")
+            db.execSQL("DROP TABLE IF EXISTS daily_weather")
+            db.execSQL("DROP TABLE IF EXISTS hourly_forecast")
+        }
     }
 
     fun insertReadings(locationKey: String, readings: List<HourlyTemperature>) {
-        require(readings.all { it.temperatureSource == "BOM" }) {
-            "Only BOM air-temperature observations may be stored as training targets."
+        require(readings.all { it.temperatureSource == OpenMeteoClient.SOURCE }) {
+            "Only Open-Meteo Best Match hourly records may be stored as training targets."
         }
         val writable = writableDatabase
         writable.beginTransaction()
@@ -310,6 +331,13 @@ class TemperatureDatabase(context: Context) : SQLiteOpenHelper(
                     putNullable("wet_bulb_temperature_c", reading.wetBulbTemperatureC)
                     putNullable("apparent_temperature_c", reading.apparentTemperatureC)
                     putNullable("shortwave_radiation_instant_wm2", reading.solarRadiationInstantWm2)
+                    putNullable("snow_depth_m", reading.snowDepthM)
+                    putNullable("direct_radiation_wm2", reading.directRadiationWm2)
+                    putNullable("diffuse_radiation_wm2", reading.diffuseRadiationWm2)
+                    putNullable("boundary_layer_height_m", reading.boundaryLayerHeightM)
+                    putNullable("wind_speed_100m_kmh", reading.windSpeed100mKmh)
+                    putNullable("wind_direction_100m_deg", reading.windDirection100mDeg)
+                    putNullable("soil_moisture_0_7cm", reading.soilMoisture0To7cm)
                     put("temperature_source", reading.temperatureSource)
                 }
                 writable.insertWithOnConflict("readings", null, values, SQLiteDatabase.CONFLICT_REPLACE)
@@ -329,7 +357,9 @@ class TemperatureDatabase(context: Context) : SQLiteOpenHelper(
                 soil_moisture_0_1cm, vapor_pressure_deficit_kpa, temperature_source,
                 surface_pressure_hpa, rain_mm, showers_mm, snowfall_cm, weather_code, visibility_m,
                 evapotranspiration_mm, et0_mm, uv_index, uv_index_clear_sky, wet_bulb_temperature_c,
-                apparent_temperature_c, shortwave_radiation_instant_wm2
+                apparent_temperature_c, shortwave_radiation_instant_wm2,
+                snow_depth_m, direct_radiation_wm2, diffuse_radiation_wm2, boundary_layer_height_m,
+                wind_speed_100m_kmh, wind_direction_100m_deg, soil_moisture_0_7cm
                 FROM readings WHERE location_key=? ORDER BY timestamp_sec ASC""".trimIndent(),
             arrayOf(locationKey)
         ).use { cursor ->
@@ -338,22 +368,40 @@ class TemperatureDatabase(context: Context) : SQLiteOpenHelper(
         return result
     }
 
+    /**
+     * Load spaced four-hour windows for model fitting. The full archive remains in SQLite, while
+     * the in-memory training set stays bounded as the local history grows.
+     */
     fun getAllReadingsByLocation(): Map<String, List<HourlyTemperature>> {
+        val counts = linkedMapOf<String, Int>()
+        readableDatabase.rawQuery("SELECT location_key, COUNT(*) FROM readings GROUP BY location_key", null).use { cursor ->
+            while (cursor.moveToNext()) counts[cursor.getString(0)] = cursor.getInt(1)
+        }
+        val strides = counts.mapValues { (_, count) -> maxOf(4, kotlin.math.ceil(count / 4000.0).toInt()) }
+        val positions = mutableMapOf<String, Int>()
+        val keepThrough = mutableMapOf<String, Int>()
         val result = linkedMapOf<String, MutableList<HourlyTemperature>>()
         readableDatabase.rawQuery(
-            """SELECT location_key, timestamp_sec, temperature_c, dew_point_c, wind_speed_kmh,
-                wind_gust_kmh, pressure_hpa, humidity_pct, cloud_cover_pct, precipitation_mm, solar_radiation_wm2,
+            """SELECT location_key, timestamp_sec, temperature_c, dew_point_c, wind_speed_kmh, wind_gust_kmh,
+                pressure_hpa, humidity_pct, cloud_cover_pct, precipitation_mm, solar_radiation_wm2,
                 cloud_low_pct, cloud_mid_pct, cloud_high_pct, wind_direction_deg, soil_temperature_c,
                 soil_moisture_0_1cm, vapor_pressure_deficit_kpa, temperature_source,
                 surface_pressure_hpa, rain_mm, showers_mm, snowfall_cm, weather_code, visibility_m,
                 evapotranspiration_mm, et0_mm, uv_index, uv_index_clear_sky, wet_bulb_temperature_c,
-                apparent_temperature_c, shortwave_radiation_instant_wm2
+                apparent_temperature_c, shortwave_radiation_instant_wm2,
+                snow_depth_m, direct_radiation_wm2, diffuse_radiation_wm2, boundary_layer_height_m,
+                wind_speed_100m_kmh, wind_direction_100m_deg, soil_moisture_0_7cm
                 FROM readings ORDER BY location_key ASC, timestamp_sec ASC""".trimIndent(),
             null
         ).use { cursor ->
             while (cursor.moveToNext()) {
                 val key = cursor.getString(0)
-                result.getOrPut(key) { mutableListOf() }.add(cursor.toWeatherReading(offset = 1))
+                val index = positions[key] ?: 0
+                if (index % (strides[key] ?: 4) == 0) keepThrough[key] = index + 3
+                if (index <= (keepThrough[key] ?: -1)) {
+                    result.getOrPut(key) { mutableListOf() }.add(cursor.toWeatherReading(offset = 1))
+                }
+                positions[key] = index + 1
             }
         }
         return result
@@ -371,7 +419,7 @@ class TemperatureDatabase(context: Context) : SQLiteOpenHelper(
         val db = writableDatabase
         db.beginTransaction()
         try {
-            val targetTables = listOf("readings", "daily_weather", "model_state", "location_profiles")
+            val targetTables = listOf("readings", "model_state", "location_profiles")
             for (table in targetTables) {
                 db.rawQuery("SELECT 1 FROM $table WHERE location_key=? LIMIT 1", arrayOf(toKey)).use { cursor ->
                     if (cursor.moveToFirst()) return false
@@ -438,41 +486,29 @@ class TemperatureDatabase(context: Context) : SQLiteOpenHelper(
     }
 
     /** Upsert completed daily aggregates by local date; retain the growing daily history separately. */
-    fun insertDailyWeather(locationKey: String, days: List<OpenMeteoClient.DailyVariables>) {
-        val writable = writableDatabase
-        writable.beginTransaction()
-        try {
-            days.forEach { day ->
-                val values = ContentValues().apply {
-                    put("location_key", locationKey)
-                    put("local_date", day.localDate)
-                    putNullableLong("sunrise_sec", day.sunriseSec)
-                    putNullableLong("sunset_sec", day.sunsetSec)
-                    putNullable("daylight_duration_sec", day.daylightDurationSec)
-                    putNullable("sunshine_duration_sec", day.sunshineDurationSec)
-                    putNullable("rain_sum_mm", day.rainSumMm)
-                    putNullable("showers_sum_mm", day.showersSumMm)
-                    putNullable("precipitation_sum_mm", day.precipitationSumMm)
-                    putNullable("precipitation_hours", day.precipitationHours)
-                    putNullable("precipitation_probability_max_pct", day.precipitationProbabilityMaxPct)
-                    putNullable("wind_direction_dominant_deg", day.windDirectionDominantDeg)
-                    putNullable("wind_speed_max_kmh", day.windSpeedMaxKmh)
-                    putNullable("wind_gusts_max_kmh", day.windGustsMaxKmh)
-                    putNullable("shortwave_radiation_sum", day.shortwaveRadiationSum)
-                    putNullable("et0_sum_mm", day.et0SumMm)
-                }
-                writable.insertWithOnConflict("daily_weather", null, values, SQLiteDatabase.CONFLICT_REPLACE)
-            }
-            writable.setTransactionSuccessful()
-        } finally {
-            writable.endTransaction()
+    fun getLatestTimestampSec(locationKey: String): Long? {
+        readableDatabase.rawQuery("SELECT MAX(timestamp_sec) FROM readings WHERE location_key=?", arrayOf(locationKey)).use { cursor ->
+            if (!cursor.moveToFirst() || cursor.isNull(0)) return null
+            return cursor.getLong(0)
         }
     }
 
-    fun getDailyWeatherCount(locationKey: String): Int {
-        readableDatabase.rawQuery("SELECT COUNT(*) FROM daily_weather WHERE location_key=?", arrayOf(locationKey)).use { cursor ->
-            return if (cursor.moveToFirst()) cursor.getInt(0) else 0
-        }
+    fun getLatestReadings(locationKey: String, limit: Int = 72): List<HourlyTemperature> {
+        val safeLimit = limit.coerceIn(1, 720)
+        val result = mutableListOf<HourlyTemperature>()
+        readableDatabase.rawQuery(
+            """SELECT timestamp_sec, temperature_c, dew_point_c, wind_speed_kmh, wind_gust_kmh,
+                pressure_hpa, humidity_pct, cloud_cover_pct, precipitation_mm, solar_radiation_wm2,
+                cloud_low_pct, cloud_mid_pct, cloud_high_pct, wind_direction_deg, soil_temperature_c,
+                soil_moisture_0_1cm, vapor_pressure_deficit_kpa, temperature_source,
+                surface_pressure_hpa, rain_mm, showers_mm, snowfall_cm, weather_code, visibility_m,
+                evapotranspiration_mm, et0_mm, uv_index, uv_index_clear_sky, wet_bulb_temperature_c,
+                apparent_temperature_c, shortwave_radiation_instant_wm2,
+                snow_depth_m, direct_radiation_wm2, diffuse_radiation_wm2, boundary_layer_height_m,
+                wind_speed_100m_kmh, wind_direction_100m_deg, soil_moisture_0_7cm FROM readings WHERE location_key=? ORDER BY timestamp_sec DESC LIMIT $safeLimit""",
+            arrayOf(locationKey)
+        ).use { cursor -> while (cursor.moveToNext()) result += cursor.toWeatherReading() }
+        return result.asReversed()
     }
 
     fun getSavedCount(locationKey: String): Int {
@@ -584,7 +620,14 @@ class TemperatureDatabase(context: Context) : SQLiteOpenHelper(
         uvIndexClearSky = nullableDouble(offset + 27),
         wetBulbTemperatureC = nullableDouble(offset + 28),
         apparentTemperatureC = nullableDouble(offset + 29),
-        solarRadiationInstantWm2 = nullableDouble(offset + 30)
+        solarRadiationInstantWm2 = nullableDouble(offset + 30),
+        snowDepthM = nullableDouble(offset + 31),
+        directRadiationWm2 = nullableDouble(offset + 32),
+        diffuseRadiationWm2 = nullableDouble(offset + 33),
+        boundaryLayerHeightM = nullableDouble(offset + 34),
+        windSpeed100mKmh = nullableDouble(offset + 35),
+        windDirection100mDeg = nullableDouble(offset + 36),
+        soilMoisture0To7cm = nullableDouble(offset + 37)
     )
 
     private fun android.database.Cursor.toLocationProfile(locationKey: String, offset: Int = 0): LocationProfile {
@@ -614,7 +657,7 @@ class TemperatureDatabase(context: Context) : SQLiteOpenHelper(
 
     companion object {
         private const val DATABASE_NAME = "templearn_local.db"
-        private const val DATABASE_VERSION = 11
+        private const val DATABASE_VERSION = 12
     }
 }
 
@@ -636,7 +679,7 @@ data class HourlyTemperature(
     val soilTemperatureC: Double? = null,
     val soilMoisture01cm: Double? = null,
     val vaporPressureDeficitKpa: Double? = null,
-    val temperatureSource: String = "BOM",
+    val temperatureSource: String = "OPEN_METEO_BEST_MATCH",
     val surfacePressureHpa: Double? = null,
     val rainMm: Double? = null,
     val showersMm: Double? = null,
@@ -649,7 +692,14 @@ data class HourlyTemperature(
     val uvIndexClearSky: Double? = null,
     val wetBulbTemperatureC: Double? = null,
     val apparentTemperatureC: Double? = null,
-    val solarRadiationInstantWm2: Double? = null
+    val solarRadiationInstantWm2: Double? = null,
+    val snowDepthM: Double? = null,
+    val directRadiationWm2: Double? = null,
+    val diffuseRadiationWm2: Double? = null,
+    val boundaryLayerHeightM: Double? = null,
+    val windSpeed100mKmh: Double? = null,
+    val windDirection100mDeg: Double? = null,
+    val soilMoisture0To7cm: Double? = null
 )
 
 data class LearnedWeatherModel(

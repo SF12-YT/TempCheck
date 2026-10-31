@@ -1,178 +1,177 @@
 package com.example.tempalearn
 
-import org.json.JSONObject
+import java.io.BufferedReader
 import java.io.IOException
 import java.net.HttpURLConnection
 import java.net.URL
 import java.net.URLEncoder
 import java.time.LocalDate
-import java.time.LocalDateTime
-import java.time.OffsetDateTime
 import java.time.ZoneId
+import java.util.zip.GZIPInputStream
 
-/** Retrieves only the previous completed day's non-temperature Open-Meteo aggregates. */
+/** Open-Meteo Best Match hourly archive client. CSV is parsed as a stream, not a giant JSON array. */
 object OpenMeteoClient {
-    data class DailyVariables(
-        val localDate: String,
-        val sunriseSec: Long?,
-        val sunsetSec: Long?,
-        val daylightDurationSec: Double?,
-        val sunshineDurationSec: Double?,
-        val rainSumMm: Double?,
-        val showersSumMm: Double?,
-        val precipitationSumMm: Double?,
-        val precipitationHours: Double?,
-        val precipitationProbabilityMaxPct: Double?,
-        val windDirectionDominantDeg: Double?,
-        val windSpeedMaxKmh: Double?,
-        val windGustsMaxKmh: Double?,
-        val shortwaveRadiationSum: Double?,
-        val et0SumMm: Double?
+    private val hourlyFields = listOf(
+        "temperature_2m",
+        "apparent_temperature",
+        "relative_humidity_2m",
+        "dew_point_2m",
+        "precipitation",
+        "rain",
+        "snowfall",
+        "snow_depth",
+        "weather_code",
+        "cloud_cover",
+        "cloud_cover_low",
+        "cloud_cover_mid",
+        "cloud_cover_high",
+        "surface_pressure",
+        "pressure_msl",
+        "wind_speed_10m",
+        "wind_direction_10m",
+        "wind_gusts_10m",
+        "shortwave_radiation",
+        "direct_radiation",
+        "diffuse_radiation",
+        "wet_bulb_temperature_2m",
+        "boundary_layer_height",
+        "wind_speed_100m",
+        "wind_direction_100m",
+        "soil_temperature_0_to_7cm",
+        "soil_moisture_0_to_7cm"
     )
 
-    data class Result(val byDate: List<DailyVariables>)
-
     @Throws(IOException::class)
-    fun fetchPreviousDailyContext(
-        latitude: Double,
-        longitude: Double,
-        timezoneId: String,
-        elevationM: Double? = null
-    ): Result {
-        // Daily aggregates only: one previous local calendar day and zero forecast days.
-        // No hourly or temperature-valued fields are requested from Open-Meteo.
-        val dailyFields = listOf(
-            "sunrise",
-            "sunset",
-            "daylight_duration",
-            "sunshine_duration",
-            "rain_sum",
-            "showers_sum",
-            "precipitation_sum",
-            "precipitation_hours",
-            "precipitation_probability_max",
-            "wind_direction_10m_dominant",
-            "wind_speed_10m_max",
-            "wind_gusts_10m_max",
-            "shortwave_radiation_sum",
-            "et0_fao_evapotranspiration"
-        ).joinToString(",")
-
-        val encodedTimezone = URLEncoder.encode(timezoneId, Charsets.UTF_8.name())
-        val elevationParameter = elevationM?.takeIf { it.isFinite() }?.let { "&elevation=$it" }.orEmpty()
-        val url = URL(
-            "https://api.open-meteo.com/v1/forecast" +
-                "?latitude=$latitude&longitude=$longitude$elevationParameter" +
-                "&daily=$dailyFields" +
-                "&past_days=1&forecast_days=0" +
-                "&timezone=$encodedTimezone" +
-                "&wind_speed_unit=kmh&precipitation_unit=mm"
-        )
-        val connection = (url.openConnection() as HttpURLConnection).apply {
-            requestMethod = "GET"
-            connectTimeout = 18_000
-            readTimeout = 30_000
-            setRequestProperty("Accept", "application/json")
-            setRequestProperty("User-Agent", "TempLearn-Android/0.7.0")
-        }
-        try {
-            val responseCode = connection.responseCode
-            val stream = if (responseCode in 200..299) connection.inputStream else connection.errorStream
-            val responseText = stream?.bufferedReader(Charsets.UTF_8)?.use { it.readText() }.orEmpty()
-            if (responseCode !in 200..299) {
-                throw IOException("Open-Meteo returned HTTP $responseCode: ${responseText.take(350)}")
-            }
-            val root = try {
-                JSONObject(responseText)
-            } catch (error: Exception) {
-                throw IOException("Open-Meteo returned data that could not be read as JSON.", error)
-            }
-            val daily = root.optJSONObject("daily")
-                ?: throw IOException("Open-Meteo returned no daily weather data.")
-            val dailyResult = parsePreviousCompletedDay(daily, timezoneId)
-            if (dailyResult.isEmpty()) {
-                throw IOException("Open-Meteo returned no completed previous-day daily record.")
-            }
-            return Result(dailyResult)
-        } finally {
-            connection.disconnect()
-        }
-    }
-
-    /** Uses Open-Meteo's global 90 m DEM endpoint when the geocoder has no elevation value. */
-    @Throws(IOException::class)
-    fun fetchElevation(latitude: Double, longitude: Double): Double? {
+    fun fetchHourlyArchive(
+        latitude: Double, longitude: Double, timezoneId: String, elevationM: Double?,
+        startDate: LocalDate, endDate: LocalDate, onBatch: (List<HourlyTemperature>) -> Unit
+    ): Int {
         require(latitude.isFinite() && latitude in -90.0..90.0)
         require(longitude.isFinite() && longitude in -180.0..180.0)
-        val url = URL("https://api.open-meteo.com/v1/elevation?latitude=$latitude&longitude=$longitude")
-        val connection = (url.openConnection() as HttpURLConnection).apply {
-            requestMethod = "GET"
-            connectTimeout = 12_000
-            readTimeout = 18_000
-            setRequestProperty("Accept", "application/json")
-            setRequestProperty("User-Agent", "TempLearn-Android/0.7.0")
+        require(!endDate.isBefore(startDate)) { "The archive end date precedes its start date." }
+        ZoneId.of(timezoneId)
+        val timezone=URLEncoder.encode(timezoneId,Charsets.UTF_8.name())
+        val elevation=elevationM?.takeIf{it.isFinite()}?.let{"&elevation=$it"}.orEmpty()
+        val url=URL("https://archive-api.open-meteo.com/v1/archive?latitude=$latitude&longitude=$longitude$elevation" +
+            "&start_date=$startDate&end_date=$endDate&hourly=${hourlyFields.joinToString(",")}&models=best_match" +
+            "&timezone=$timezone&timeformat=unixtime&temperature_unit=celsius&wind_speed_unit=kmh" +
+            "&precipitation_unit=mm&format=csv")
+        val connection=(url.openConnection() as HttpURLConnection).apply{
+            requestMethod="GET";connectTimeout=30_000;readTimeout=600_000
+            setRequestProperty("Accept","text/csv")
+            setRequestProperty("Accept-Encoding","gzip")
+            setRequestProperty("User-Agent","TempLearn-Android/0.8.0")
         }
-        try {
-            val responseCode = connection.responseCode
-            val stream = if (responseCode in 200..299) connection.inputStream else connection.errorStream
-            val responseText = stream?.bufferedReader(Charsets.UTF_8)?.use { it.readText() }.orEmpty()
-            if (responseCode !in 200..299) {
-                throw IOException("Open-Meteo Elevation returned HTTP $responseCode: ${responseText.take(250)}")
+        try{
+            val code=connection.responseCode
+            if(code !in 200..299){
+                val detail=connection.errorStream?.bufferedReader(Charsets.UTF_8)?.use{it.readText()}.orEmpty()
+                throw IOException("Open-Meteo Historical Weather returned HTTP $code: ${detail.take(500)}")
             }
-            val root = JSONObject(responseText)
-            val values = root.optJSONArray("elevation") ?: return null
-            if (values.length() == 0 || values.isNull(0)) return null
-            return values.optDouble(0, Double.NaN).takeIf { it.isFinite() }
-        } finally {
-            connection.disconnect()
-        }
+            val input=connection.inputStream
+            val decoded=if(connection.contentEncoding.equals("gzip",true)) GZIPInputStream(input) else input
+            return decoded.bufferedReader(Charsets.UTF_8).use{parseCsv(it,onBatch)}
+        }finally{connection.disconnect()}
     }
 
-    private fun parsePreviousCompletedDay(daily: JSONObject, timezoneId: String): List<DailyVariables> {
-        val times = daily.optJSONArray("time") ?: return emptyList()
-        val zone = runCatching { ZoneId.of(timezoneId) }.getOrElse { ZoneId.of("UTC") }
-        val today = LocalDate.now(zone)
-        val result = ArrayList<DailyVariables>(times.length())
-        for (index in 0 until times.length()) {
-            val rawDate = times.optString(index, "")
-            val localDate = runCatching { LocalDate.parse(rawDate.take(10)) }.getOrNull() ?: continue
-            // Protect against an API response containing today's incomplete daily aggregate.
-            if (!localDate.isBefore(today)) continue
-            result += DailyVariables(
-                localDate = localDate.toString(),
-                sunriseSec = daily.dateTimeAt("sunrise", index, zone),
-                sunsetSec = daily.dateTimeAt("sunset", index, zone),
-                daylightDurationSec = daily.numberAt("daylight_duration", index),
-                sunshineDurationSec = daily.numberAt("sunshine_duration", index),
-                rainSumMm = daily.numberAt("rain_sum", index),
-                showersSumMm = daily.numberAt("showers_sum", index),
-                precipitationSumMm = daily.numberAt("precipitation_sum", index),
-                precipitationHours = daily.numberAt("precipitation_hours", index),
-                precipitationProbabilityMaxPct = daily.numberAt("precipitation_probability_max", index),
-                windDirectionDominantDeg = daily.numberAt("wind_direction_10m_dominant", index),
-                windSpeedMaxKmh = daily.numberAt("wind_speed_10m_max", index),
-                windGustsMaxKmh = daily.numberAt("wind_gusts_10m_max", index),
-                shortwaveRadiationSum = daily.numberAt("shortwave_radiation_sum", index),
-                et0SumMm = daily.numberAt("et0_fao_evapotranspiration", index)
+    private fun parseCsv(reader:BufferedReader,onBatch:(List<HourlyTemperature>)->Unit):Int{
+        var header:List<String>?=null
+        var indices:Map<String,Int> = emptyMap()
+        val batch=ArrayList<HourlyTemperature>(256)
+        var imported=0
+        reader.forEachLine{line->
+            if(line.isBlank())return@forEachLine
+            val cells=splitCsv(line)
+            if(cells.firstOrNull()?.trim()?.equals("time",true)==true && cells.any{it.trim()=="temperature_2m"}){
+                header=cells.map{it.trim()}
+                indices=header!!.withIndex().associate{it.value to it.index}
+                val missing=hourlyFields.filterNot{it in indices}
+                if(missing.isNotEmpty())throw IOException("CSV is missing requested fields: ${missing.joinToString()}")
+                return@forEachLine
+            }
+            val columns=header ?: return@forEachLine
+            if(cells.size<columns.size)return@forEachLine
+            val timestamp=cells.getOrNull(indices["time"] ?: 0)?.trim()?.toLongOrNull() ?: return@forEachLine
+            val temperature=cells.numberAt(indices,"temperature_2m") ?: return@forEachLine
+            batch += HourlyTemperature(
+                timestampSec=timestamp,temperatureC=temperature,
+                apparentTemperatureC=cells.numberAt(indices,"apparent_temperature"),
+                humidityPct=cells.numberAt(indices,"relative_humidity_2m"),
+                dewPointC=cells.numberAt(indices,"dew_point_2m"),
+                precipitationMm=cells.numberAt(indices,"precipitation"),
+                rainMm=cells.numberAt(indices,"rain"),
+                snowfallCm=cells.numberAt(indices,"snowfall"),
+                snowDepthM=cells.numberAt(indices,"snow_depth"),
+                weatherCode=cells.numberAt(indices,"weather_code")?.toInt(),
+                cloudCoverPct=cells.numberAt(indices,"cloud_cover"),
+                cloudLowPct=cells.numberAt(indices,"cloud_cover_low"),
+                cloudMidPct=cells.numberAt(indices,"cloud_cover_mid"),
+                cloudHighPct=cells.numberAt(indices,"cloud_cover_high"),
+                surfacePressureHpa=cells.numberAt(indices,"surface_pressure"),
+                pressureHpa=cells.numberAt(indices,"pressure_msl"),
+                windSpeedKmh=cells.numberAt(indices,"wind_speed_10m"),
+                windDirectionDeg=cells.numberAt(indices,"wind_direction_10m"),
+                windGustKmh=cells.numberAt(indices,"wind_gusts_10m"),
+                solarRadiationWm2=cells.numberAt(indices,"shortwave_radiation"),
+                directRadiationWm2=cells.numberAt(indices,"direct_radiation"),
+                diffuseRadiationWm2=cells.numberAt(indices,"diffuse_radiation"),
+                wetBulbTemperatureC=cells.numberAt(indices,"wet_bulb_temperature_2m"),
+                boundaryLayerHeightM=cells.numberAt(indices,"boundary_layer_height"),
+                windSpeed100mKmh=cells.numberAt(indices,"wind_speed_100m"),
+                windDirection100mDeg=cells.numberAt(indices,"wind_direction_100m"),
+                soilTemperatureC=cells.numberAt(indices,"soil_temperature_0_to_7cm"),
+                soilMoisture0To7cm=cells.numberAt(indices,"soil_moisture_0_to_7cm"),
+                temperatureSource=SOURCE
             )
+            imported++
+            if(batch.size>=256){onBatch(batch.toList());batch.clear()}
         }
-        return result
+        if(header==null)throw IOException("Open-Meteo response contained no hourly CSV header.")
+        if(batch.isNotEmpty())onBatch(batch.toList())
+        if(imported==0)throw IOException("No rows with a valid 2 m temperature target were returned.")
+        return imported
     }
 
-    private fun JSONObject.dateTimeAt(arrayName: String, index: Int, zone: ZoneId): Long? {
-        val array = optJSONArray(arrayName) ?: return null
-        if (index !in 0 until array.length() || array.isNull(index)) return null
-        val raw = array.optString(index, "")
-        if (raw.isBlank()) return null
-        return runCatching { OffsetDateTime.parse(raw).toEpochSecond() }.getOrNull()
-            ?: runCatching { LocalDateTime.parse(raw).atZone(zone).toEpochSecond() }.getOrNull()
+    private fun splitCsv(line:String):List<String>{
+        val values=ArrayList<String>();val field=StringBuilder();var quoted=false;var i=0
+        while(i<line.length){
+            val c=line[i]
+            when{
+                c=='"' && quoted && i+1<line.length && line[i+1]=='"'->{field.append('"');i++}
+                c=='"'->quoted=!quoted
+                c==',' && !quoted->{values+=field.toString();field.setLength(0)}
+                else->field.append(c)
+            }
+            i++
+        }
+        values+=field.toString()
+        return values
     }
 
-    private fun JSONObject.numberAt(arrayName: String, index: Int): Double? {
-        val array = optJSONArray(arrayName) ?: return null
-        if (index !in 0 until array.length() || array.isNull(index)) return null
-        val value = array.optDouble(index, Double.NaN)
-        return value.takeIf { it.isFinite() }
+    private fun List<String>.numberAt(indices:Map<String,Int>,name:String):Double?{
+        val value=getOrNull(indices[name] ?: return null)?.trim().orEmpty()
+        return value.toDoubleOrNull()?.takeIf{it.isFinite()}
     }
 
+    @Throws(IOException::class)
+    fun fetchElevation(latitude:Double,longitude:Double):Double?{
+        require(latitude.isFinite() && latitude in -90.0..90.0)
+        require(longitude.isFinite() && longitude in -180.0..180.0)
+        val url=URL("https://api.open-meteo.com/v1/elevation?latitude=$latitude&longitude=$longitude")
+        val connection=(url.openConnection() as HttpURLConnection).apply{
+            requestMethod="GET";connectTimeout=12_000;readTimeout=18_000
+            setRequestProperty("Accept","application/json")
+            setRequestProperty("User-Agent","TempLearn-Android/0.8.0")
+        }
+        try{
+            val code=connection.responseCode
+            val stream=if(code in 200..299)connection.inputStream else connection.errorStream
+            val response=stream?.bufferedReader(Charsets.UTF_8)?.use{it.readText()}.orEmpty()
+            if(code !in 200..299)throw IOException("Open-Meteo Elevation returned HTTP $code: ${response.take(250)}")
+            val values=org.json.JSONObject(response).optJSONArray("elevation") ?: return null
+            if(values.length()==0 || values.isNull(0))return null
+            return values.optDouble(0,Double.NaN).takeIf{it.isFinite()}
+        }finally{connection.disconnect()}
+    }
+    const val SOURCE="OPEN_METEO_BEST_MATCH"
 }
