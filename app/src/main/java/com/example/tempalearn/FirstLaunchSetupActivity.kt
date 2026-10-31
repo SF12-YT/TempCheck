@@ -137,7 +137,7 @@ class FirstLaunchSetupActivity : Activity() {
         addText(downloadCard, "3 · DOWNLOAD HISTORICAL DATASET", 10.5f, muted, true)
         addText(
             downloadCard,
-            "Open-Meteo Best Match · hourly reanalysis · 1 January 2000 to today. TempLearn downloads one complete CSV file directly to this device, saves it locally, then imports it into the weather database. Pre-training happens only after this step.",
+            "Open-Meteo Best Match · hourly reanalysis · 1 January 2000 through the latest available archive date. The API does not expose today's archive data yet, so TempLearn automatically uses the latest accepted date. It downloads one complete CSV file directly to this device, saves it locally, then imports it into the weather database. Pre-training happens only after this step.",
             11.5f, muted, false
         ).apply { setPadding(0, dp(6), 0, dp(9)); setLineSpacing(dp(2).toFloat(), 1f) }
         downloadProgress = progressBar()
