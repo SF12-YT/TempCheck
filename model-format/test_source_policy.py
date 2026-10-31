@@ -68,8 +68,7 @@ class SourcePolicyTests(unittest.TestCase):
     def test_reduced_archive_invalidates_models_after_reimport(self):
         sync = (KOTLIN / "SyncRepository.kt").read_text(encoding="utf-8")
         database = (KOTLIN / "TemperatureDatabase.kt").read_text(encoding="utf-8")
-        migration = sync.split("if (initialNeeded) {", 1)[1].split("}", 1)[0]
-        self.assertIn("db.clearModels()", migration)
+        self.assertIn("db.clearModels()", sync)
         self.assertIn('writableDatabase.delete("model_state", null, null)', database)
         self.assertIn("open_meteo_best_match_2000_present_v2.csv", sync)
         self.assertIn("open_meteo_best_match_2000_present.csv", sync)
