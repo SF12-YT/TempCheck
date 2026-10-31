@@ -337,7 +337,7 @@ class MainActivity : Activity() {
         addText(modelCard, "PORTABLE MACHINE-LEARNING MODEL", 11f, mutedColor, true)
         addText(
             modelCard,
-            "Export a complete, portable model package: learned parameters, 53-feature schema, preprocessing, ridge-regression algorithm, inference contract, Python inference and training code, evaluation metrics, training coverage and geographic metadata. It opens independently of TempLearn and contains no API keys or raw hourly history.",
+            "Export a complete, portable model package: learned parameters, 62-feature schema, preprocessing, ridge-regression algorithm, inference contract, Python inference and training code, evaluation metrics, training coverage and geographic metadata. It opens independently of TempLearn and contains no API keys or raw hourly history.",
             12f,
             mutedColor,
             false
@@ -759,7 +759,7 @@ class MainActivity : Activity() {
             val safeName = (profile?.name ?: location).lowercase(Locale.ROOT)
                 .replace(Regex("[^a-z0-9]+"), "_").trim('_').take(36).ifBlank { "location" }
             pendingModelExportZip = zipBytes
-            pendingModelExportFilename = if (shared) "templearn_shared_model_v2.zip" else "templearn_${safeName}_model_v2.zip"
+            pendingModelExportFilename = if (shared) "templearn_shared_model_v3.zip" else "templearn_${safeName}_model_v3.zip"
             val intent = Intent(Intent.ACTION_CREATE_DOCUMENT).apply {
                 addCategory(Intent.CATEGORY_OPENABLE)
                 type = "application/zip"
@@ -778,7 +778,7 @@ class MainActivity : Activity() {
         if (requestCode != REQUEST_EXPORT_MODEL) return
         val zipBytes = pendingModelExportZip
         pendingModelExportZip = null
-        val filename = pendingModelExportFilename ?: "templearn_model_v2.zip"
+        val filename = pendingModelExportFilename ?: "templearn_model_v3.zip"
         pendingModelExportFilename = null
         val uri = data?.data
         if (resultCode != RESULT_OK || uri == null || zipBytes == null) return

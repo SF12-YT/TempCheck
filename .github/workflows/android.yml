@@ -29,8 +29,9 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          find . -type d -name __pycache__ -prune -exec rm -rf {} +
           zip -qr "$RUNNER_TEMP/TempLearn-source.zip" . \
-            -x '.git/*' '**/.gradle/*' '**/build/*' 'app/build/*' '.idea/*'
+            -x '.git/*' '**/.gradle/*' '**/build/*' 'app/build/*' '.idea/*' '**/__pycache__/*' '**/*.pyc'
 
       - name: Upload source project ZIP
         uses: actions/upload-artifact@v7

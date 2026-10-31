@@ -55,13 +55,13 @@ Open-Meteo Geocoding resolves a typed place or postcode into a canonical place I
 1. On first launch, enter a town, postcode or address and choose the matching geocoded place.
 2. Choose a BOM observation station automatically or manually.
 3. Download the Open-Meteo historical archive, then start pre-training as a separate step.
-4. Later syncs update only the latest stored date range. Location and station selection can also be changed in Settings.
+4. The selected station mode and WMO station are saved with the location. Later syncs update only the latest stored date range for the Open-Meteo archive.
 
 No GPS permission is requested. The user-entered place query is resolved through Open-Meteo Geocoding.
 
 ## BOM observation station reference
 
-TempLearn separately displays recent observations from the Australian Bureau of Meteorology (BOM). The station can be selected automatically or manually. Automatic selection checks nearby station feeds and prefers the closest station with useful hourly coverage, rather than blindly selecting the nearest station if it only reports once per day. Manual selection presents nearby BOM stations and stores the chosen WMO station identifier. The app refreshes the selected station's recent feed (up to the feed's 72-hour window) and shows its observed temperature and station distance.
+During first-time setup, TempLearn separately checks recent observations from the Australian Bureau of Meteorology (BOM). The station can be selected automatically or manually. Automatic selection checks nearby station feeds and prefers the closest station with useful hourly coverage, rather than blindly selecting the nearest station if it only reports once per day. Manual selection presents nearby BOM stations and stores the chosen WMO station identifier. Selecting a station fetches its recent feed (up to the feed's 72-hour window) and shows its latest observed temperature and distance.
 
 **BOM observations are not mixed into the Open-Meteo historical training dataset.** They are labelled as station observations and used as a separate local reference only. The model remains trained and evaluated against Open-Meteo Best Match reanalysis. A station choice such as Mount Boyce therefore does not change the coordinates or grid cell used for the long historical archive. BOM feeds may have different reporting frequencies and not every station reports every hour; missing station hours remain absent. The anonymous BOM feed is intended for personal, non-commercial use; review BOM's current access terms before redistributing or using it commercially.
 
