@@ -132,6 +132,7 @@ class SourcePolicyTests(unittest.TestCase):
         self.assertEqual(workflow.count("if: " + fork_only), 2)
         self.assertIn("ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}", workflow)
         self.assertIn("run: gradle --no-daemon assembleRelease", workflow)
+        self.assertIn("verify --verbose --print-certs app/build/outputs/apk/release/app-release.apk", workflow)
         self.assertIn("run: gradle --no-daemon assembleDebug", workflow)
 
     def test_archive_retries_rate_limits(self):
