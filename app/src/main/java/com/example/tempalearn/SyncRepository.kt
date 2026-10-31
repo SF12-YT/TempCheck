@@ -203,6 +203,9 @@ object SyncRepository {
             // A dataset is marked ready only after the entire local CSV has been imported.
             // The first-run CSV is retained as the on-device archive, separate from training.
             if (initialNeeded) {
+                // Input features changed from the 27-field archive to the selected 15-field set.
+                // Old local/shared coefficients must be retrained against the replacement dataset.
+                db.clearModels()
                 prefs.edit().putBoolean(completeKey, true).apply()
                 // The 15-field archive is safely imported; now remove the previous 27-field CSV.
                 File(archiveDirectory, "open_meteo_best_match_2000_present.csv").delete()

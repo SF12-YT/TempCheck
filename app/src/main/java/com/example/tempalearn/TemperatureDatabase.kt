@@ -556,6 +556,11 @@ class TemperatureDatabase(context: Context) : SQLiteOpenHelper(
         writableDatabase.insertWithOnConflict("model_state", null, values, SQLiteDatabase.CONFLICT_REPLACE)
     }
 
+    /** Remove fitted coefficients after the input dataset definition changes. */
+    fun clearModels() {
+        writableDatabase.delete("model_state", null, null)
+    }
+
     fun getModel(locationKey: String): LearnedWeatherModel? {
         readableDatabase.rawQuery(
             "SELECT weights, training_examples, fit_mae_c, validation_bias_c, validation_examples, trained_at_sec, training_start_sec, training_end_sec, trained_location_count, prior_weights FROM model_state WHERE location_key=?",
