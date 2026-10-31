@@ -116,7 +116,7 @@ object OpenMeteoClient {
                 val contentLength = connection.getHeaderFieldLong("Content-Length", -1L)
                 val raw = CountingInputStream(connection.inputStream)
                 val decoded = if (connection.contentEncoding.equals("gzip", true)) GZIPInputStream(raw) else raw
-                val fileOutput = FileOutputStream(part, false)
+                val fileOutput = FileOutputStream(partial, false)
                 val bufferedOutput = BufferedOutputStream(fileOutput, 64 * 1024)
                 try {
                     val buffer = ByteArray(64 * 1024)
