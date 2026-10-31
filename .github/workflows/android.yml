@@ -54,7 +54,7 @@ jobs:
           validate-wrappers: false
 
       - name: Restore release signing keystore
-        if: github.event_name != 'pull_request'
+        if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
         shell: bash
         env:
           ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
@@ -78,7 +78,7 @@ jobs:
           echo "Release keystore and alias verified."
 
       - name: Build signed release APK
-        if: github.event_name != 'pull_request'
+        if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
         env:
           ANDROID_KEYSTORE_FILE: ${{ runner.temp }}/templearn-release.jks
           ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
@@ -86,12 +86,12 @@ jobs:
           ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
         run: gradle --no-daemon assembleRelease
 
-      - name: Build debug APK for pull request checks
-        if: github.event_name == 'pull_request'
+      - name: Build debug APK for fork pull request checks (secrets are unavailable)
+        if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository
         run: gradle --no-daemon assembleDebug
 
       - name: Upload signed release APK
-        if: github.event_name != 'pull_request'
+        if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
         uses: actions/upload-artifact@v7
         with:
           name: TempLearn-release-apk
@@ -99,8 +99,8 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
-      - name: Upload debug APK for pull request checks
-        if: github.event_name == 'pull_request'
+      - name: Upload debug APK for fork pull request checks
+        if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository
         uses: actions/upload-artifact@v7
         with:
           name: TempLearn-debug-apk
