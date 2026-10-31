@@ -1,6 +1,6 @@
-"""Reference standard-library trainer for TempLearn model format v2.
+"""Reference standard-library trainer for TempLearn model format v3.
 
-Input is JSON Lines: one BOM hourly observation per line. See MODEL_FORMAT.md.
+Input is JSON Lines: one Open-Meteo Best Match hourly observation per line. See MODEL_FORMAT.md.
 """
 from __future__ import annotations
 
@@ -68,10 +68,10 @@ def _read_examples(path: Path) -> tuple[list[tuple[list[float], float]], list[tu
             row = json.loads(line)
         except json.JSONDecodeError as exc:
             raise ValueError(f"Invalid JSON on line {line_number}: {exc}") from exc
-        if str(row.get("temperature_source", "")).strip().upper() != "BOM":
-            raise ValueError(f'Line {line_number} must explicitly declare temperature_source=\"BOM\"; mixed-source training is prohibited.')
-        if str(row.get("weather_source", "")).strip().upper() != "BOM":
-            raise ValueError(f'Line {line_number} must explicitly declare weather_source=\"BOM\"; mixed-provider predictors are prohibited.')
+        if str(row.get("temperature_source", "")).strip().upper() != "OPEN_METEO_BEST_MATCH":
+            raise ValueError(f'Line {line_number} must explicitly declare temperature_source=\"Open-Meteo Best Match\"; mixed-source training is prohibited.')
+        if str(row.get("weather_source", "")).strip().upper() != "OPEN_METEO_BEST_MATCH":
+            raise ValueError(f'Line {line_number} must explicitly declare weather_source=\"Open-Meteo Best Match\"; mixed-provider predictors are prohibited.')
         grouped.setdefault(str(row.get("location_key", "default")), []).append(row)
 
     training: list[tuple[list[float], float]] = []
@@ -104,7 +104,7 @@ def _read_examples(path: Path) -> tuple[list[tuple[list[float], float]], list[tu
             weather = previous[-1].get("weather", {})
             vector = build_feature_vector(
                 target_timestamp_unix_seconds=int(target["timestamp_unix_seconds"]),
-                previous_bom_hours=[
+                previous_open_meteo_hours=[
                     {"timestamp_unix_seconds": int(item["timestamp_unix_seconds"]), "temperature_c": item["temperature_c"]}
                     for item in reversed(previous)
                 ],
@@ -123,7 +123,7 @@ def _read_examples(path: Path) -> tuple[list[tuple[list[float], float]], list[tu
         validation.extend(generated[split:])
 
     if len(training) < 5 or not validation:
-        raise ValueError("Not enough complete consecutive BOM hours to train and validate this model.")
+        raise ValueError("Not enough complete consecutive Open-Meteo Best Match hours to train and validate this model.")
     return training, validation, contributing, min(starts, default=0), max(ends, default=0)
 
 
@@ -135,8 +135,8 @@ def _metrics(examples: list[tuple[list[float], float]], weights: list[float]) ->
 
 def train_model(model_path: Path, data_path: Path, output_path: Path) -> None:
     model = json.loads(model_path.read_text(encoding="utf-8"))
-    if model.get("format") != "templearn-weather-model" or model.get("format_version") != 2:
-        raise ValueError("Expected a TempLearn model format v2 model.json.")
+    if model.get("format") != "templearn-weather-model" or model.get("format_version") != 3:
+        raise ValueError("Expected a TempLearn model format v3 model.json.")
     if model.get("feature_count") != len(EXPECTED_FEATURES):
         raise ValueError("Model feature_count does not match the v2 schema.")
     schema = model.get("feature_schema")
@@ -179,8 +179,8 @@ def train_model(model_path: Path, data_path: Path, output_path: Path) -> None:
         "training_start_unix_seconds": start,
         "training_end_unix_seconds": end,
         "contributing_location_count": contributing,
-        "input_temperature_source": "BOM",
-        "input_feature_source": "BOM",
+        "input_temperature_source": "Open-Meteo Best Match",
+        "input_feature_source": "Open-Meteo Best Match",
     }
     model["evaluation"] = {
         "metric": "mean_absolute_error",

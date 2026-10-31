@@ -13,7 +13,7 @@ def base_model():
     from reference_predictor import EXPECTED_FEATURES
     return {
         "format": "templearn-weather-model",
-        "format_version": 2,
+        "format_version": 3,
         "feature_count": len(EXPECTED_FEATURES),
         "feature_schema": [{"index": i, "name": name} for i, name in enumerate(EXPECTED_FEATURES)],
         "weights": [0.0] * len(EXPECTED_FEATURES),
@@ -23,7 +23,7 @@ def base_model():
     }
 
 
-def rows(source="BOM"):
+def rows(source="OPEN_METEO_BEST_MATCH"):
     result = []
     start = 1_800_000_000
     for i in range(20):
@@ -47,15 +47,15 @@ class TrainerTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             folder = Path(directory)
             model = folder / "model.json"
-            data = folder / "bom.jsonl"
+            data = folder / "open_meteo.jsonl"
             output = folder / "updated.json"
             model.write_text(json.dumps(base_model()), encoding="utf-8")
             data.write_text("\n".join(json.dumps(row) for row in rows()) + "\n", encoding="utf-8")
             train_model(model, data, output)
             result = json.loads(output.read_text(encoding="utf-8"))
-            self.assertEqual(result["feature_count"], 53)
-            self.assertEqual(len(result["weights"]), 53)
-            self.assertEqual(len(result["coefficients"]), 53)
+            self.assertEqual(result["feature_count"], 62)
+            self.assertEqual(len(result["weights"]), 62)
+            self.assertEqual(len(result["coefficients"]), 62)
             self.assertGreater(result["training"]["examples"], 0)
             self.assertEqual(result["training"]["contributing_location_count"], 1)
             self.assertIn("validation_mae_c", result["evaluation"])
@@ -64,7 +64,7 @@ class TrainerTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             folder = Path(directory)
             model = folder / "model.json"
-            data = folder / "bom.jsonl"
+            data = folder / "open_meteo.jsonl"
             output = folder / "updated.json"
             model.write_text(json.dumps(base_model()), encoding="utf-8")
             combined = rows() + rows()
@@ -82,28 +82,28 @@ class TrainerTests(unittest.TestCase):
             self.assertEqual(result["training"]["contributing_location_count"], 2)
             self.assertEqual(result["training"]["examples"], 34)
 
-    def test_trainer_rejects_non_bom_temperature_source(self):
+    def test_trainer_rejects_non_open_meteo_temperature_source(self):
         with tempfile.TemporaryDirectory() as directory:
             folder = Path(directory)
             model = folder / "model.json"
-            data = folder / "bom.jsonl"
+            data = folder / "open_meteo.jsonl"
             output = folder / "updated.json"
             model.write_text(json.dumps(base_model()), encoding="utf-8")
-            invalid = rows(source="Open-Meteo")
+            invalid = rows(source="OTHER")
             data.write_text("\n".join(json.dumps(row) for row in invalid) + "\n", encoding="utf-8")
             with self.assertRaisesRegex(ValueError, "temperature_source"):
                 train_model(model, data, output)
 
-    def test_trainer_rejects_non_bom_weather_source(self):
+    def test_trainer_rejects_non_open_meteo_weather_source(self):
         with tempfile.TemporaryDirectory() as directory:
             folder = Path(directory)
             model = folder / "model.json"
-            data = folder / "bom.jsonl"
+            data = folder / "open_meteo.jsonl"
             output = folder / "updated.json"
             model.write_text(json.dumps(base_model()), encoding="utf-8")
             invalid = rows(source="BOM")
             for row in invalid:
-                row["weather_source"] = "Open-Meteo"
+                row["weather_source"] = "OTHER"
             data.write_text("\n".join(json.dumps(row) for row in invalid) + "\n", encoding="utf-8")
             with self.assertRaisesRegex(ValueError, "weather_source"):
                 train_model(model, data, output)
@@ -112,7 +112,7 @@ class TrainerTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             folder = Path(directory)
             model = folder / "model.json"
-            data = folder / "bom.jsonl"
+            data = folder / "open_meteo.jsonl"
             output = folder / "updated.json"
             invalid = base_model()
             invalid["feature_schema"][4]["name"] = "wrong_feature"
