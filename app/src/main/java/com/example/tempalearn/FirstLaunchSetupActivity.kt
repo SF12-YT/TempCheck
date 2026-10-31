@@ -70,7 +70,7 @@ class FirstLaunchSetupActivity : Activity() {
         scroll.addView(page, -1, -2)
         setContentView(scroll)
 
-        addText(page, "T E M P L E A R N · FIRST-TIME SETUP", 10.5f, green, true)
+        addText(page, "T E M P L E A R N · DATASET SETUP", 10.5f, green, true)
         addText(page, "Build your local\nweather learner.", 29f, ink, true).apply {
             setPadding(0, dp(10), 0, dp(7))
             setLineSpacing(dp(1).toFloat(), 1f)
@@ -456,7 +456,10 @@ class FirstLaunchSetupActivity : Activity() {
 
     private fun finishSetup() {
         if (taskRunning) return
-        prefs.edit().putBoolean(AppPreferences.KEY_INITIAL_SETUP_COMPLETE, true).apply()
+        prefs.edit()
+            .putBoolean(AppPreferences.KEY_INITIAL_SETUP_COMPLETE, true)
+            .putBoolean(AppPreferences.KEY_ONE_FILE_ARCHIVE_SETUP_COMPLETE, true)
+            .apply()
         startActivity(Intent(this, MainActivity::class.java))
         finish()
     }

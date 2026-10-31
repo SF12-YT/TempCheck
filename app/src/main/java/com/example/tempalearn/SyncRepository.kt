@@ -15,6 +15,7 @@ object AppPreferences {
     const val SHARED_MODEL_KEY = "__templearn_shared_weather_model__"
     const val KEY_NOTIFICATION_PERMISSION_REQUESTED = "notification_permission_requested"
     const val KEY_INITIAL_SETUP_COMPLETE = "initial_setup_complete_v2"
+    const val KEY_ONE_FILE_ARCHIVE_SETUP_COMPLETE = "one_file_archive_setup_complete_v1"
     const val KEY_STATION_MODE = "bom_station_mode"
     const val KEY_STATION_WMO_ID = "bom_station_wmo_id"
     const val KEY_STATION_NAME = "bom_station_name"

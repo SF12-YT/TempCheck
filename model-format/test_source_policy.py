@@ -112,6 +112,9 @@ class SourcePolicyTests(unittest.TestCase):
             self.assertIn("Manual · choose a station", activity)
             self.assertIn("SyncRepository.downloadHistoricalDataset", activity)
             self.assertIn("SyncRepository.pretrainHistoricalDataset", activity)
+        main_activity = (KOTLIN / "MainActivity.kt").read_text(encoding="utf-8")
+        self.assertIn("KEY_ONE_FILE_ARCHIVE_SETUP_COMPLETE", main_activity)
+        self.assertIn("KEY_ONE_FILE_ARCHIVE_SETUP_COMPLETE", (KOTLIN / "SyncRepository.kt").read_text(encoding="utf-8"))
 
     def test_archive_retries_rate_limits(self):
         client = (KOTLIN / "OpenMeteoClient.kt").read_text(encoding="utf-8")

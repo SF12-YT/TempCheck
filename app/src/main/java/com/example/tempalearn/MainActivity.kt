@@ -83,7 +83,9 @@ class MainActivity : Activity() {
             prefs.edit().putString(AppPreferences.KEY_LOCATION, AppPreferences.DEFAULT_LOCATION).apply()
         }
         NotificationHelper.createChannel(this)
-        if (!prefs.getBoolean(AppPreferences.KEY_INITIAL_SETUP_COMPLETE, false)) {
+        val initialSetupNeeded = !prefs.getBoolean(AppPreferences.KEY_INITIAL_SETUP_COMPLETE, false)
+        val oneFileArchiveSetupNeeded = !prefs.getBoolean(AppPreferences.KEY_ONE_FILE_ARCHIVE_SETUP_COMPLETE, false)
+        if (initialSetupNeeded || oneFileArchiveSetupNeeded) {
             startActivity(Intent(this, FirstLaunchSetupActivity::class.java))
             finish()
             return
