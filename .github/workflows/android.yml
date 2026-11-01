@@ -8,7 +8,7 @@ on:
     branches: [main, master, templearn-openmeteo-v0.8.0]
 
 permissions:
-  contents: read
+  contents: write
 
 concurrency:
   group: templearn-android-${{ github.ref }}
@@ -96,6 +96,27 @@ jobs:
           apksigner="$(find "$sdk_root/build-tools" -mindepth 2 -maxdepth 2 -type f -name apksigner | sort -V | tail -n 1)"
           : "${apksigner:?Android SDK apksigner was not found}"
           "$apksigner" verify --verbose --print-certs app/build/outputs/apk/release/app-release.apk
+
+      - name: Publish direct signed APK release asset
+        if: github.event_name == 'push' && github.ref == 'refs/heads/templearn-openmeteo-v0.8.0'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          version_name="$(sed -nE 's/^[[:space:]]*versionName = "([^"]+)".*/\\1/p' app/build.gradle.kts | head -n 1)"
+          : "${version_name:?Could not read app versionName}"
+          tag="v${version_name}"
+          apk_name="TempLearn-${version_name}.apk"
+          cp app/build/outputs/apk/release/app-release.apk "$apk_name"
+          if gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload "$tag" "$apk_name" --repo "$GITHUB_REPOSITORY" --clobber
+          else
+            gh release create "$tag" "$apk_name" \
+              --repo "$GITHUB_REPOSITORY" \
+              --title "TempLearn ${version_name}" \
+              --notes "Signed Android APK for TempLearn ${version_name}."
+          fi
 
       - name: Build debug APK for fork pull request checks (secrets are unavailable)
         if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository
