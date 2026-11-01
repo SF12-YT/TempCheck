@@ -30,7 +30,10 @@ class SourcePolicyTests(unittest.TestCase):
         self.assertIn("format=csv", archive)
         self.assertNotIn("past_days=", archive)
         self.assertIn("https://api.open-meteo.com/v1/forecast", forecast)
-        self.assertIn("&past_days=1&forecast_days=0", forecast)
+        self.assertIn("&start_date=$startDate&end_date=$endDate", forecast)
+        self.assertIn("&models=best_match", forecast)
+        self.assertNotIn("past_days=", forecast)
+        self.assertNotIn("forecast_days=", forecast)
         self.assertIn("&timeformat=unixtime", forecast)
         self.assertIn("&format=csv", forecast)
         self.assertIn("&hourly=", client)
@@ -118,7 +121,10 @@ class SourcePolicyTests(unittest.TestCase):
         self.assertNotIn("minOf(latestDate ?: archiveEndDate, archiveEndDate)", sync)
         self.assertIn("private fun refreshRecentForecastDataset", sync)
         self.assertIn("downloadRecentHourlyForecastToFile", sync)
-        self.assertIn("latest_forecast_update.csv", sync)
+        self.assertIn("recent_forecast_yesterday_today.csv", sync)
+        self.assertIn('val today = LocalDate.now(ZoneId.of(profile.timezoneId))', sync)
+        self.assertIn("val yesterday = today.minusDays(1)", sync)
+        self.assertIn("yesterday,\n                today,", sync)
         historical = sync.split("fun downloadHistoricalDataset", 1)[1].split("private fun refreshRecentForecastDataset", 1)[0]
         self.assertNotIn("downloadRecentHourlyForecastToFile", historical)
         self.assertLess(sync.index('putBoolean(completeKey, true)'), sync.index("private fun refreshRecentForecastDataset"))
@@ -126,6 +132,25 @@ class SourcePolicyTests(unittest.TestCase):
         self.assertLess(orchestration.index("pretrainHistoricalDataset"), orchestration.index("refreshRecentForecastDataset"))
         self.assertIn("catch (error: Exception)", orchestration)
         self.assertIn("recentUpdateWarning", orchestration)
+
+    def test_recent_forecast_fetches_yesterday_and_today_using_location_timezone(self):
+        client = (KOTLIN / "OpenMeteoClient.kt").read_text(encoding="utf-8")
+        forecast = client.split("fun downloadRecentHourlyForecastToFile", 1)[1].split(
+            "private fun downloadCsvToFile", 1
+        )[0]
+        self.assertIn("startDate: LocalDate", forecast)
+        self.assertIn("endDate: LocalDate", forecast)
+        self.assertIn("&start_date=$startDate&end_date=$endDate", forecast)
+        self.assertIn("require(!endDate.isBefore(startDate))", forecast)
+
+        sync = (KOTLIN / "SyncRepository.kt").read_text(encoding="utf-8")
+        refresh = sync.split("private fun refreshRecentForecastDataset", 1)[1].split(
+            "fun pretrainHistoricalDataset", 1
+        )[0]
+        self.assertIn('LocalDate.now(ZoneId.of(profile.timezoneId))', refresh)
+        self.assertIn("val yesterday = today.minusDays(1)", refresh)
+        self.assertIn("profile.timezoneId,\n                yesterday,\n                today,", refresh)
+        self.assertIn("db.insertReadingsIfAbsent(locationKey, batch)", refresh)
 
     def test_historical_json_is_trained_before_optional_recent_csv(self):
         sync = (KOTLIN / "SyncRepository.kt").read_text(encoding="utf-8")
