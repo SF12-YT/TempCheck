@@ -83,9 +83,9 @@ data class SyncResult(
 
 object SyncRepository {
     /**
-     * Import the published complete JSON snapshot for the default location. The original JSON is
-     * retained unchanged on-device. Other locations retain the one-file Open-Meteo CSV path.
-     * Every sync follows the long-term import (when needed) with the recent Forecast API window.
+     * Import and validate the published long-term archive. The original JSON is retained
+     * unchanged on-device; other locations use the one-file Open-Meteo CSV archive. The rolling
+     * Forecast API refresh is deliberately handled later, after the imported history is trained.
      */
     @Throws(Exception::class)
     fun downloadHistoricalDataset(
@@ -444,28 +444,31 @@ object SyncRepository {
     ): SyncResult {
         val downloaded = downloadHistoricalDataset(context, location, selectedProfile, onArchiveProgress)
         val existingDb = TemperatureDatabase(context)
-        val existingLocalModel = try {
-            existingDb.getModel(downloaded.locationKey)
+        val existingModels = try {
+            Pair(
+                existingDb.getModel(downloaded.locationKey),
+                existingDb.getModel(AppPreferences.SHARED_MODEL_KEY)
+            )
         } finally {
             existingDb.close()
         }
+        val existingLocalModel = existingModels.first
+        val existingSharedModel = existingModels.second
 
-        // On first import (or if the local model is missing), fit from the historical archive
-        // before making the separate recent-data request.
-        var trained = if (downloaded.initialImportCompletedNow || existingLocalModel == null) {
+        // On first import (or if either required model is missing), fit from the historical
+        // archive before making the separate recent-data request.
+        var trained = if (
+            downloaded.initialImportCompletedNow ||
+            existingLocalModel == null ||
+            existingSharedModel == null
+        ) {
             onTrainingProgress(TrainingProgress(5, "Historical archive imported; training from the saved history…"))
             pretrainHistoricalDataset(context, location, onTrainingProgress)
         } else {
-            val sharedDb = TemperatureDatabase(context)
-            val sharedExamples = try {
-                sharedDb.getModel(AppPreferences.SHARED_MODEL_KEY)?.trainingExamples ?: 0
-            } finally {
-                sharedDb.close()
-            }
             TrainingResult(
                 locationKey = downloaded.locationKey,
                 trainingExamples = existingLocalModel.trainingExamples,
-                sharedTrainingExamples = sharedExamples,
+                sharedTrainingExamples = existingSharedModel.trainingExamples,
                 modelReady = true
             )
         }
