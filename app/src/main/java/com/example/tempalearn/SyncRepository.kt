@@ -372,8 +372,8 @@ object SyncRepository {
                     )
                 }
             )
-            // The refreshed observations now provide the ground truth for any forecast whose
-            // target timestamp has just become available.
+            // The newly imported hourly records can now verify pending forecasts
+            // whose exact target timestamps have become available.
             db.reconcilePendingPredictions(locationKey)
             prefs.edit().putLong(AppPreferences.syncTimeKey(locationKey), Instant.now().epochSecond).apply()
             return uniqueForecastRows
@@ -517,7 +517,7 @@ object SyncRepository {
         val finalCounts = try {
             val latestReadings = finalDb.getLatestReadings(downloaded.locationKey, 72)
             val predictionModel = finalDb.getModel(downloaded.locationKey)
-                ?: finalDb.getModel(AppPreferences.SHARED_MODEL_KEY)?.takeIf { downloaded.locationProfile != null }
+                ?: finalDb.getModel(AppPreferences.SHARED_MODEL_KEY)
             if (predictionModel != null) {
                 predictAndStoreNextHour(
                     database = finalDb,
