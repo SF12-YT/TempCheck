@@ -39,9 +39,6 @@ data class FeedbackAdjustedPrediction(
  * regression model: sparse feedback must not destabilise its fitted coefficients.
  */
 object PredictionErrorLearner {
-    const val MINIMUM_VERIFIED_PREDICTIONS = 8
-    private const val MAX_SAMPLES = 200
-
     fun correction(
         samples: List<PredictionErrorSample>,
         targetTimestampSec: Long,
@@ -58,14 +55,18 @@ object PredictionErrorLearner {
                     it.temperatureTrendC.isFinite()
             }
             .sortedByDescending { it.targetTimestampSec }
-            .take(MAX_SAMPLES)
             .toList()
 
-        if (recent.size < MINIMUM_VERIFIED_PREDICTIONS) {
-            return PredictionCorrection(0.0, recent.size, 0.0, 0.0)
+        if (recent.isEmpty()) {
+            return PredictionCorrection(0.0, 0, 0.0, 0.0)
         }
 
-        val globalBias = weightedMeanError(recent) ?: 0.0
+        // Start learning from the first verified forecast, but shrink early corrections
+        // toward zero so one unusual hour cannot swing the next prediction too far.
+        // Every verified sample is retained and considered; recency weighting limits stale influence.
+        val rawGlobalBias = weightedMeanError(recent) ?: 0.0
+        val confidence = recent.size.toDouble() / (recent.size + 8.0)
+        val globalBias = rawGlobalBias * confidence
         val targetHour = runCatching {
             Instant.ofEpochSecond(targetTimestampSec).atZone(ZoneId.of(timezoneId)).hour
         }.getOrDefault(Instant.ofEpochSecond(targetTimestampSec).atZone(ZoneId.of("UTC")).hour)
