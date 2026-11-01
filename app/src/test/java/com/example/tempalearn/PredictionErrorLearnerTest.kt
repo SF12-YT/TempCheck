@@ -37,24 +37,33 @@ class PredictionErrorLearnerTest {
         )
 
     @Test
-    fun doesNotAdjustBeforeEightMatchedForecasts() {
-        val result = correction(samples(7, 4.0))
-        assertEquals(0.0, result.correctionC, 0.0)
-        assertEquals(7, result.verifiedPredictions)
+    fun startsLearningFromTheFirstMatchedForecastWithConservativeShrinkage() {
+        val result = correction(samples(1, 4.0))
+        assertTrue("Expected a positive correction, got ${result.correctionC}", result.correctionC > 0.0)
+        assertTrue("Early feedback should be shrunk, got ${result.correctionC}", result.correctionC < 4.0)
+        assertEquals(1, result.verifiedPredictions)
+    }
+
+    @Test
+    fun continuesCountingAndUsingForecastsBeyondTheOldEightSampleThreshold() {
+        val result = correction(samples(250, 2.0))
+        assertEquals(250, result.verifiedPredictions)
+        assertTrue("Expected a positive correction, got ${result.correctionC}", result.correctionC > 0.0)
+        assertTrue("Correction should remain conservative, got ${result.correctionC}", result.correctionC < 2.0)
     }
 
     @Test
     fun correctsRepeatedCoolPredictionsInTheWarmerDirection() {
         val result = correction(samples(8, 2.0))
         assertTrue("Expected a positive correction, got ${result.correctionC}", result.correctionC > 0.0)
-        assertEquals(2.0, result.correctionC, 0.0001)
+        assertEquals(1.0, result.correctionC, 0.0001)
     }
 
     @Test
     fun correctsRepeatedWarmPredictionsInTheCoolerDirection() {
         val result = correction(samples(8, -2.0))
         assertTrue("Expected a negative correction, got ${result.correctionC}", result.correctionC < 0.0)
-        assertEquals(-2.0, result.correctionC, 0.0001)
+        assertEquals(-1.0, result.correctionC, 0.0001)
     }
 
     @Test
