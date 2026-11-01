@@ -130,7 +130,9 @@ class SourcePolicyTests(unittest.TestCase):
     def test_historical_json_is_trained_before_optional_recent_csv(self):
         sync = (KOTLIN / "SyncRepository.kt").read_text(encoding="utf-8")
         orchestration = sync.split("fun sync(", 1)[1]
-        self.assertIn("downloaded.initialImportCompletedNow || existingLocalModel == null", orchestration)
+        self.assertIn("downloaded.initialImportCompletedNow", orchestration)
+        self.assertIn("existingLocalModel == null", orchestration)
+        self.assertIn("existingSharedModel == null", orchestration)
         self.assertLess(orchestration.index("pretrainHistoricalDataset"), orchestration.index("refreshRecentForecastDataset"))
         main = (KOTLIN / "MainActivity.kt").read_text(encoding="utf-8")
         self.assertIn("historical learning is retained", main)
