@@ -286,6 +286,7 @@ class SourcePolicyTests(unittest.TestCase):
         self.assertIn("predictAndStoreNextHour(", main)
         self.assertIn("prediction_feedback", database)
         self.assertIn("actual_temp_c IS NULL", database)
+        self.assertIn("if (base.first > nowSec)", feedback)
 
     def test_historical_json_is_deleted_only_after_successful_training(self):
         sync = (KOTLIN / "SyncRepository.kt").read_text(encoding="utf-8")
