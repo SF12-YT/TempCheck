@@ -88,20 +88,49 @@ object SyncRepository {
         require(normalized.length >= 2) { "Enter a postcode, town, or address." }
         val prefs = app.getSharedPreferences(AppPreferences.PREFS_NAME, Context.MODE_PRIVATE)
         val legacyKey = AppPreferences.locationKey(normalized)
+        val usePublishedJson = normalized.equals(AppPreferences.DEFAULT_LOCATION, ignoreCase = true)
         var locationKey = AppPreferences.activeLocationKey(prefs, normalized)
         val db = TemperatureDatabase(app)
         try {
             var profile = selectedProfile?.copy(searchQuery = normalized)
                 ?: db.getLocationProfile(locationKey)
                 ?: db.getLocationProfile(legacyKey)
-                ?: LocationGeocodingClient.resolveUnambiguous(normalized, legacyKey)
-            val canonical = AppPreferences.geocodedLocationKey(profile.geocodingId)
+                ?: if (usePublishedJson) {
+                    // The published archive already contains the authoritative grid coordinates,
+                    // elevation and timezone. Seed a local profile so first launch never needs
+                    // Geocoding or Elevation API calls before downloading that archive.
+                    LocationProfile(
+                        locationKey = legacyKey,
+                        geocodingId = 0L,
+                        searchQuery = normalized,
+                        name = "2780",
+                        admin1 = "New South Wales",
+                        admin2 = null,
+                        country = "Australia",
+                        countryCode = "AU",
+                        latitude = -33.6153,
+                        longitude = 150.2665,
+                        elevationM = null,
+                        timezoneId = "Australia/Sydney",
+                        featureCode = null,
+                        population = null,
+                        postcodes = listOf("2780"),
+                        resolvedAtSec = Instant.now().epochSecond
+                    )
+                } else {
+                    LocationGeocodingClient.resolveUnambiguous(normalized, legacyKey)
+                }
+            val canonical = if (profile.geocodingId > 0L) {
+                AppPreferences.geocodedLocationKey(profile.geocodingId)
+            } else {
+                legacyKey
+            }
             if (locationKey != canonical) {
                 db.moveLocationKey(legacyKey, canonical, profile.geocodingId)
                 locationKey = canonical
                 profile = profile.copy(locationKey = canonical)
             }
-            if (profile.elevationM == null) {
+            if (profile.elevationM == null && !usePublishedJson) {
                 val elevation = runCatching { OpenMeteoClient.fetchElevation(profile.latitude, profile.longitude) }.getOrNull()
                 if (elevation != null) profile = profile.copy(elevationM = elevation)
             }
@@ -129,7 +158,6 @@ object SyncRepository {
 
             // The published JSON is the full 2000-10/31/2026 snapshot for the app's default
             // 2780 location. Other locations receive a matching full-range CSV from Open-Meteo.
-            val usePublishedJson = normalized.equals(AppPreferences.DEFAULT_LOCATION, ignoreCase = true)
             val archiveFile = File(
                 archiveDirectory,
                 if (usePublishedJson) "open_meteo_best_match_full_history.json"
