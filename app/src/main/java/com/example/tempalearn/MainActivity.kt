@@ -267,7 +267,7 @@ class MainActivity : Activity() {
         historyRows = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         historyCard.addView(historyRows, LinearLayout.LayoutParams(-1, -2))
 
-        val attribution = "Historical hourly temperature targets and predictors: Open-Meteo Historical Weather API, Best Match reanalysis. The default location's complete published JSON archive is downloaded once, retained unchanged on this phone and pre-trained automatically on first launch. Other locations use a matching Open-Meteo archive download; later syncs update the latest available date. Missing values remain missing. Weather data by Open-Meteo.com (CC BY 4.0). Reanalysis is modelled historical weather, not a local station observation. Validation uses later unseen hours and is not a guarantee of forecast accuracy."
+        val attribution = "Historical hourly temperature targets and predictors: Open-Meteo Historical Weather API, Best Match reanalysis. The default location's complete published JSON archive is downloaded once, imported into local storage, used for historical training, and then deleted to reclaim space. Other locations use a matching Open-Meteo archive download; later syncs update the latest available date. Missing values remain missing. Weather data by Open-Meteo.com (CC BY 4.0). Reanalysis is modelled historical weather, not a local station observation. Validation uses later unseen hours and is not a guarantee of forecast accuracy."
         addText(content, attribution, 11f, mutedColor, false).apply {
             val attributedText = android.text.SpannableString(attribution)
             val providerStart = attribution.indexOf("Open-Meteo.com")
@@ -542,14 +542,31 @@ class MainActivity : Activity() {
             // once enough local hourly history exists, its locally adapted model takes precedence.
             val predictionModel = model ?: sharedModel?.takeIf { profile != null }
             val predicted = predictionModel?.let {
-                WeatherLearner.predictNext(all, it, zoneId, profile?.modelContext() ?: ModelLocationContext())
+                predictAndStoreNextHour(
+                    database = db,
+                    locationKey = locationKey,
+                    readings = all,
+                    model = it,
+                    timezoneId = zoneId,
+                    locationContext = profile?.modelContext() ?: ModelLocationContext()
+                )
             }
             if (predicted != null) {
-                predictionText.text = String.format(Locale.getDefault(), "%.1f °C", predicted.second)
+                predictionText.text = String.format(Locale.getDefault(), "%.1f °C", predicted.temperatureC)
                 val formatter = DateTimeFormatter.ofPattern("EEE, d MMM · h:mm a", Locale.US)
-                val localTime = Instant.ofEpochSecond(predicted.first).atZone(ZoneId.of(zoneId))
+                val localTime = Instant.ofEpochSecond(predicted.targetTimestampSec).atZone(ZoneId.of(zoneId))
                 val modelDescription = if (model != null) "Location-adapted estimate" else "Shared-model estimate · adapting to this location"
-                predictionSubtext.text = "$modelDescription · ${formatter.format(localTime)} local time"
+                val feedbackDescription = if (predicted.verifiedPredictions >= PredictionErrorLearner.MINIMUM_VERIFIED_PREDICTIONS) {
+                    String.format(
+                        Locale.getDefault(),
+                        "Feedback correction %+.1f°C · %d verified forecasts",
+                        predicted.correctionC,
+                        predicted.verifiedPredictions
+                    )
+                } else {
+                    "Learning from verified forecasts ${predicted.verifiedPredictions}/${PredictionErrorLearner.MINIMUM_VERIFIED_PREDICTIONS}"
+                }
+                predictionSubtext.text = "$modelDescription · ${formatter.format(localTime)} local time · $feedbackDescription"
             } else {
                 predictionText.text = "— °C"
                 predictionSubtext.text = if (all.size < 4) {
