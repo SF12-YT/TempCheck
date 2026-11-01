@@ -180,6 +180,10 @@ fun predictAndStoreNextHour(
     locationContext: ModelLocationContext = ModelLocationContext(),
     nowSec: Long = Instant.now().epochSecond
 ): FeedbackAdjustedPrediction? {
+    // Reconcile on every prediction refresh, not only after a network sync. A matching
+    // reading may already be stored (for example after a retry or another import path).
+    database.reconcilePendingPredictions(locationKey, nowSec)
+
     val base = WeatherLearner.predictNext(readings, model, timezoneId, locationContext) ?: return null
     val latest = readings.takeLast(3)
     if (latest.size != 3) return null
