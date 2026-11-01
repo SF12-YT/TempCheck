@@ -83,9 +83,9 @@ data class SyncResult(
 
 object SyncRepository {
     /**
-     * Import and validate the published long-term archive. The original JSON is retained
-     * unchanged on-device; other locations use the one-file Open-Meteo CSV archive. The rolling
-     * Forecast API refresh is deliberately handled later, after the imported history is trained.
+     * Import and validate the published long-term archive. Its JSON/CSV is a temporary import
+     * source; the hourly readings and fitted model are retained in the app's private database.
+     * The default JSON is removed only after historical training has completed successfully.
      */
     @Throws(Exception::class)
     fun downloadHistoricalDataset(
@@ -187,8 +187,8 @@ object SyncRepository {
             }
 
             // The JSON/CSV file is an import source, not the app's permanent data store.
-            // Once imported, the full hourly series is stored in SQLite and the file may be deleted.
-            // Recent data is fetched separately and inserted only for previously unseen timestamps.
+            // The full hourly series is stored in SQLite; the default JSON is deleted only after
+            // the historical model has trained successfully in sync().
             val archiveFile = File(
                 archiveDirectory,
                 if (usePublishedJson) "open_meteo_best_match_full_history.json"
@@ -290,6 +290,7 @@ object SyncRepository {
             // immediately after its full import, before attempting the optional rolling refresh.
             if (initialNeeded) {
                 db.clearModels()
+                db.clearPredictionFeedback(locationKey)
                 prefs.edit().putBoolean(completeKey, true).apply()
                 File(archiveDirectory, "open_meteo_best_match_2000_present.csv").delete()
             }
@@ -371,6 +372,9 @@ object SyncRepository {
                     )
                 }
             )
+            // The refreshed observations now provide the ground truth for any forecast whose
+            // target timestamp has just become available.
+            db.reconcilePendingPredictions(locationKey)
             prefs.edit().putLong(AppPreferences.syncTimeKey(locationKey), Instant.now().epochSecond).apply()
             return uniqueForecastRows
         } finally {
@@ -494,8 +498,36 @@ object SyncRepository {
             trained = pretrainHistoricalDataset(context, location, onTrainingProgress)
         }
 
+        // The source JSON is disposable only after the historical rows have been fitted into
+        // a usable local model. If training failed or there were too few examples, keep it so a
+        // later run can retry safely. A previously trained installation can also clean up a
+        // leftover JSON from an earlier app version.
+        if (
+            trained.modelReady &&
+            downloaded.initialHistoryComplete &&
+            downloaded.localArchivePath.endsWith(".json", ignoreCase = true)
+        ) {
+            val historicalJson = File(downloaded.localArchivePath)
+            if (historicalJson.isFile) {
+                historicalJson.delete()
+            }
+        }
+
         val finalDb = TemperatureDatabase(context)
         val finalCounts = try {
+            val latestReadings = finalDb.getLatestReadings(downloaded.locationKey, 72)
+            val predictionModel = finalDb.getModel(downloaded.locationKey)
+                ?: finalDb.getModel(AppPreferences.SHARED_MODEL_KEY)?.takeIf { downloaded.locationProfile != null }
+            if (predictionModel != null) {
+                predictAndStoreNextHour(
+                    database = finalDb,
+                    locationKey = downloaded.locationKey,
+                    readings = latestReadings,
+                    model = predictionModel,
+                    timezoneId = downloaded.locationProfile.timezoneId,
+                    locationContext = downloaded.locationProfile.modelContext()
+                )
+            }
             val latest = finalDb.getLatestTimestampSec(downloaded.locationKey)
             val endDate = latest?.let {
                 Instant.ofEpochSecond(it).atZone(ZoneId.of(downloaded.locationProfile.timezoneId)).toLocalDate().toString()
