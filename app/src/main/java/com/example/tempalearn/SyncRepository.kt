@@ -77,7 +77,8 @@ data class SyncResult(
     val locationKey: String, val fetchedHours: Int, val savedReadings: Int, val trainingExamples: Int,
     val timezoneId: String, val modelReady: Boolean, val resolvedAddress: String, val locationCount: Int,
     val sharedTrainingExamples: Int, val initialHistoryComplete: Boolean, val initialImportCompletedNow: Boolean,
-    val importedFromDate: String, val importedToDate: String, val locationProfile: LocationProfile
+    val importedFromDate: String, val importedToDate: String, val locationProfile: LocationProfile,
+    val recentUpdateWarning: String? = null
 )
 
 object SyncRepository {
@@ -281,8 +282,61 @@ object SyncRepository {
                 importedToDate = archiveEndDate.toString()
             }
 
-            // The latest Forecast API window intentionally overlaps historical rows. The database
-            // ignores every existing (location_key, timestamp_sec) pair, including manual repeats.
+            // The historical archive is a complete, independent training source. Mark it complete
+            // immediately after its full import, before attempting the optional rolling refresh.
+            if (initialNeeded) {
+                db.clearModels()
+                prefs.edit().putBoolean(completeKey, true).apply()
+                File(archiveDirectory, "open_meteo_best_match_2000_present.csv").delete()
+            }
+
+            db.getLatestTimestampSec(locationKey)?.let { latestTimestamp ->
+                importedToDate = Instant.ofEpochSecond(latestTimestamp).atZone(zone).toLocalDate().toString()
+            }
+            return DatasetDownloadResult(
+                locationKey = locationKey,
+                fetchedHours = fetchedRows,
+                savedReadings = db.getSavedCount(locationKey),
+                initialHistoryComplete = prefs.getBoolean(completeKey, false),
+                initialImportCompletedNow = initialNeeded,
+                importedFromDate = importedFromDate,
+                importedToDate = importedToDate,
+                locationProfile = profile,
+                localArchivePath = archiveFile.absolutePath,
+                localArchiveBytes = archiveFile.length()
+            )
+        } finally {
+            db.close()
+        }
+    }
+
+    /**
+     * Fetch and merge the rolling recent-data window after the historical archive has already
+     * been imported and trained. A failure here must not invalidate the historical dataset.
+     */
+    @Throws(Exception::class)
+    private fun refreshRecentForecastDataset(
+        context: Context,
+        location: String,
+        onProgress: (ArchiveDownloadProgress) -> Unit = {}
+    ): Int {
+        val app = context.applicationContext
+        val prefs = app.getSharedPreferences(AppPreferences.PREFS_NAME, Context.MODE_PRIVATE)
+        val locationKey = AppPreferences.activeLocationKey(prefs, location)
+        val db = TemperatureDatabase(app)
+        try {
+            val profile = db.getLocationProfile(locationKey)
+                ?: throw IllegalStateException("The selected location profile is not available.")
+            val archiveDirectory = File(
+                app.filesDir,
+                "historical-datasets/" + locationKey.replace(Regex("[^A-Za-z0-9_-]"), "_")
+            )
+            if (!archiveDirectory.exists() && !archiveDirectory.mkdirs()) {
+                throw java.io.IOException("Could not create the local recent-data folder.")
+            }
+
+            // This request deliberately overlaps the historical archive. Existing timestamps
+            // are ignored by the database primary key; only genuinely new hours are inserted.
             val recentForecastFile = File(archiveDirectory, "latest_forecast_update.csv")
             OpenMeteoClient.downloadRecentHourlyForecastToFile(
                 profile.latitude,
@@ -312,30 +366,8 @@ object SyncRepository {
                     )
                 }
             )
-            fetchedRows += uniqueForecastRows
-
-            db.getLatestTimestampSec(locationKey)?.let { latestTimestamp ->
-                importedToDate = Instant.ofEpochSecond(latestTimestamp).atZone(zone).toLocalDate().toString()
-            }
-
-            if (initialNeeded) {
-                db.clearModels()
-                prefs.edit().putBoolean(completeKey, true).apply()
-                File(archiveDirectory, "open_meteo_best_match_2000_present.csv").delete()
-            }
             prefs.edit().putLong(AppPreferences.syncTimeKey(locationKey), Instant.now().epochSecond).apply()
-            return DatasetDownloadResult(
-                locationKey = locationKey,
-                fetchedHours = fetchedRows,
-                savedReadings = db.getSavedCount(locationKey),
-                initialHistoryComplete = prefs.getBoolean(completeKey, false),
-                initialImportCompletedNow = initialNeeded,
-                importedFromDate = importedFromDate,
-                importedToDate = importedToDate,
-                locationProfile = profile,
-                localArchivePath = archiveFile.absolutePath,
-                localArchiveBytes = archiveFile.length()
-            )
+            return uniqueForecastRows
         } finally {
             db.close()
         }
@@ -397,7 +429,11 @@ object SyncRepository {
         }
     }
 
-    /** Existing refresh flow: update archive first, then refit the models. */
+    /**
+     * Import and learn from the complete historical source first. The recent Forecast API
+     * refresh is a separate best-effort step; it can add newer hours but cannot block learning
+     * from the already-validated JSON/CSV historical archive.
+     */
     @Throws(Exception::class)
     fun sync(
         context: Context,
@@ -407,23 +443,76 @@ object SyncRepository {
         onTrainingProgress: (TrainingProgress) -> Unit = {}
     ): SyncResult {
         val downloaded = downloadHistoricalDataset(context, location, selectedProfile, onArchiveProgress)
-        onTrainingProgress(TrainingProgress(5, "Historical dataset ready; starting model training…"))
-        val trained = pretrainHistoricalDataset(context, location, onTrainingProgress)
+        val existingDb = TemperatureDatabase(context)
+        val existingLocalModel = try {
+            existingDb.getModel(downloaded.locationKey)
+        } finally {
+            existingDb.close()
+        }
+
+        // On first import (or if the local model is missing), fit from the historical archive
+        // before making the separate recent-data request.
+        var trained = if (downloaded.initialImportCompletedNow || existingLocalModel == null) {
+            onTrainingProgress(TrainingProgress(5, "Historical archive imported; training from the saved history…"))
+            pretrainHistoricalDataset(context, location, onTrainingProgress)
+        } else {
+            val sharedDb = TemperatureDatabase(context)
+            val sharedExamples = try {
+                sharedDb.getModel(AppPreferences.SHARED_MODEL_KEY)?.trainingExamples ?: 0
+            } finally {
+                sharedDb.close()
+            }
+            TrainingResult(
+                locationKey = downloaded.locationKey,
+                trainingExamples = existingLocalModel.trainingExamples,
+                sharedTrainingExamples = sharedExamples,
+                modelReady = true
+            )
+        }
+
+        var recentRows = 0
+        var recentUpdateWarning: String? = null
+        try {
+            onTrainingProgress(TrainingProgress(88, "Historical model is ready; refreshing the latest hourly data…"))
+            recentRows = refreshRecentForecastDataset(context, location, onArchiveProgress)
+        } catch (error: Exception) {
+            recentUpdateWarning = (error.message ?: "The recent hourly update could not be completed.")
+                .take(400)
+        }
+
+        // If the recent request contributed new timestamps, refit to include them. If it failed,
+        // retain the already-trained historical model and let the next scheduled sync retry.
+        if (recentRows > 0) {
+            trained = pretrainHistoricalDataset(context, location, onTrainingProgress)
+        }
+
+        val finalDb = TemperatureDatabase(context)
+        val finalCounts = try {
+            val latest = finalDb.getLatestTimestampSec(downloaded.locationKey)
+            val endDate = latest?.let {
+                Instant.ofEpochSecond(it).atZone(ZoneId.of(downloaded.locationProfile.timezoneId)).toLocalDate().toString()
+            } ?: downloaded.importedToDate
+            Triple(finalDb.getSavedCount(downloaded.locationKey), endDate, finalDb.getModel(AppPreferences.SHARED_MODEL_KEY)?.trainingExamples ?: trained.sharedTrainingExamples)
+        } finally {
+            finalDb.close()
+        }
+
         return SyncResult(
             locationKey = downloaded.locationKey,
-            fetchedHours = downloaded.fetchedHours,
-            savedReadings = downloaded.savedReadings,
+            fetchedHours = downloaded.fetchedHours + recentRows,
+            savedReadings = finalCounts.first,
             trainingExamples = trained.trainingExamples,
             timezoneId = downloaded.locationProfile.timezoneId,
             modelReady = trained.modelReady,
             resolvedAddress = downloaded.locationProfile.displayName,
             locationCount = TemperatureDatabase(context).useCountLocationsSafely(),
-            sharedTrainingExamples = trained.sharedTrainingExamples,
+            sharedTrainingExamples = finalCounts.third,
             initialHistoryComplete = downloaded.initialHistoryComplete,
             initialImportCompletedNow = downloaded.initialImportCompletedNow,
             importedFromDate = downloaded.importedFromDate,
-            importedToDate = downloaded.importedToDate,
-            locationProfile = downloaded.locationProfile
+            importedToDate = finalCounts.second,
+            locationProfile = downloaded.locationProfile,
+            recentUpdateWarning = recentUpdateWarning
         )
     }
 
