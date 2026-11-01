@@ -60,6 +60,7 @@ class TemperatureDatabase(context: Context) : SQLiteOpenHelper(
         db.execSQL("CREATE INDEX readings_location_time ON readings(location_key, timestamp_sec)")
         createLocationProfilesTable(db)
         createModelStateTable(db)
+        createPredictionFeedbackTable(db)
     }
 
     private fun createDailyWeatherTable(db: SQLiteDatabase) {
@@ -163,6 +164,29 @@ class TemperatureDatabase(context: Context) : SQLiteOpenHelper(
                 trained_location_count INTEGER NOT NULL DEFAULT 1,
                 prior_weights TEXT
             )""".trimIndent()
+        )
+    }
+
+    private fun createPredictionFeedbackTable(db: SQLiteDatabase) {
+        db.execSQL(
+            """CREATE TABLE IF NOT EXISTS prediction_feedback (
+                location_key TEXT NOT NULL,
+                target_timestamp_sec INTEGER NOT NULL,
+                prediction_made_at_sec INTEGER NOT NULL,
+                predicted_temp_c REAL NOT NULL,
+                actual_temp_c REAL,
+                error_c REAL,
+                verified_at_sec INTEGER,
+                local_hour INTEGER NOT NULL,
+                temperature_trend_c REAL NOT NULL,
+                cloud_cover_pct REAL,
+                solar_radiation_wm2 REAL,
+                weather_code INTEGER,
+                PRIMARY KEY(location_key, target_timestamp_sec)
+            )""".trimIndent()
+        )
+        db.execSQL(
+            "CREATE INDEX IF NOT EXISTS prediction_feedback_verified ON prediction_feedback(location_key, actual_temp_c, target_timestamp_sec)"
         )
     }
 
@@ -288,6 +312,12 @@ class TemperatureDatabase(context: Context) : SQLiteOpenHelper(
             db.execSQL("DELETE FROM model_state")
             db.execSQL("DROP TABLE IF EXISTS daily_weather")
             db.execSQL("DROP TABLE IF EXISTS hourly_forecast")
+        }
+    }
+
+        if (oldVersion < 13) {
+            // v0.10.2 adds separate storage for predictions and their later verified errors.
+            createPredictionFeedbackTable(db)
         }
     }
 
@@ -553,6 +583,129 @@ class TemperatureDatabase(context: Context) : SQLiteOpenHelper(
         }
     }
 
+    /**
+     * Save/update a forecast while its target is still unverified. Once actual_temp_c has been
+     * filled, later dashboard refreshes cannot rewrite the forecast that was evaluated.
+     */
+    fun savePendingPrediction(
+        locationKey: String,
+        targetTimestampSec: Long,
+        predictedTempC: Double,
+        predictedAtSec: Long,
+        localHour: Int,
+        temperatureTrendC: Double,
+        cloudCoverPct: Double?,
+        solarRadiationWm2: Double?,
+        weatherCode: Int?
+    ): Boolean {
+        require(predictedTempC.isFinite() && temperatureTrendC.isFinite())
+        val values = ContentValues().apply {
+            put("location_key", locationKey)
+            put("target_timestamp_sec", targetTimestampSec)
+            put("prediction_made_at_sec", predictedAtSec)
+            put("predicted_temp_c", predictedTempC)
+            put("local_hour", localHour.coerceIn(0, 23))
+            put("temperature_trend_c", temperatureTrendC)
+            putNullable("cloud_cover_pct", cloudCoverPct)
+            putNullable("solar_radiation_wm2", solarRadiationWm2)
+            if (weatherCode == null) putNull("weather_code") else put("weather_code", weatherCode)
+        }
+        val database = writableDatabase
+        database.beginTransaction()
+        try {
+            var exists = false
+            var alreadyVerified = false
+            database.rawQuery(
+                "SELECT actual_temp_c FROM prediction_feedback WHERE location_key=? AND target_timestamp_sec=?",
+                arrayOf(locationKey, targetTimestampSec.toString())
+            ).use { cursor ->
+                if (cursor.moveToFirst()) {
+                    exists = true
+                    alreadyVerified = !cursor.isNull(0)
+                }
+            }
+            val saved = when {
+                alreadyVerified -> false
+                exists -> database.update(
+                    "prediction_feedback",
+                    values,
+                    "location_key=? AND target_timestamp_sec=? AND actual_temp_c IS NULL AND prediction_made_at_sec < ?",
+                    arrayOf(locationKey, targetTimestampSec.toString(), predictedAtSec.toString())
+                ) > 0
+                else -> database.insertWithOnConflict(
+                    "prediction_feedback", null, values, SQLiteDatabase.CONFLICT_IGNORE
+                ) != -1L
+            }
+            database.setTransactionSuccessful()
+            return saved
+        } finally {
+            database.endTransaction()
+        }
+    }
+
+    /** Match pending forecasts to newly imported readings at the exact target hour. */
+    fun reconcilePendingPredictions(locationKey: String, verifiedAtSec: Long = System.currentTimeMillis() / 1000L): Int {
+        val database = writableDatabase
+        database.execSQL(
+            """UPDATE prediction_feedback
+                SET actual_temp_c = (
+                        SELECT r.temperature_c FROM readings r
+                        WHERE r.location_key=prediction_feedback.location_key
+                          AND r.timestamp_sec=prediction_feedback.target_timestamp_sec
+                    ),
+                    error_c = (
+                        SELECT r.temperature_c FROM readings r
+                        WHERE r.location_key=prediction_feedback.location_key
+                          AND r.timestamp_sec=prediction_feedback.target_timestamp_sec
+                    ) - predicted_temp_c,
+                    verified_at_sec = ?
+                WHERE location_key=?
+                  AND actual_temp_c IS NULL
+                  AND EXISTS (
+                        SELECT 1 FROM readings r
+                        WHERE r.location_key=prediction_feedback.location_key
+                          AND r.timestamp_sec=prediction_feedback.target_timestamp_sec
+                  )""".trimIndent(),
+            arrayOf(verifiedAtSec, locationKey)
+        )
+        database.rawQuery("SELECT changes()", null).use { cursor ->
+            return if (cursor.moveToFirst()) cursor.getInt(0) else 0
+        }
+    }
+
+    /** Only completed, timestamp-matched predictions can teach the correction layer. */
+    fun getVerifiedPredictionErrors(locationKey: String, limit: Int = 200): List<PredictionErrorSample> {
+        val safeLimit = limit.coerceIn(1, 500)
+        val result = mutableListOf<PredictionErrorSample>()
+        readableDatabase.rawQuery(
+            """SELECT target_timestamp_sec, predicted_temp_c, actual_temp_c, local_hour,
+                temperature_trend_c, cloud_cover_pct, solar_radiation_wm2, weather_code
+                FROM prediction_feedback
+                WHERE location_key=? AND actual_temp_c IS NOT NULL AND error_c IS NOT NULL
+                ORDER BY target_timestamp_sec DESC LIMIT $safeLimit""".trimIndent(),
+            arrayOf(locationKey)
+        ).use { cursor ->
+            while (cursor.moveToNext()) {
+                result += PredictionErrorSample(
+                    targetTimestampSec = cursor.getLong(0),
+                    predictedTempC = cursor.getDouble(1),
+                    actualTempC = cursor.getDouble(2),
+                    localHour = cursor.getInt(3),
+                    temperatureTrendC = cursor.getDouble(4),
+                    cloudCoverPct = cursor.nullableDouble(5),
+                    solarRadiationWm2 = cursor.nullableDouble(6),
+                    weatherCode = if (cursor.isNull(7)) null else cursor.getInt(7)
+                )
+            }
+        }
+        return result
+    }
+
+    /** Clear feedback only when the underlying historical dataset is deliberately re-imported. */
+    fun clearPredictionFeedback(locationKey: String) {
+        writableDatabase.delete("prediction_feedback", "location_key=?", arrayOf(locationKey))
+    }
+
     fun saveModel(locationKey: String, model: LearnedWeatherModel) {
         val values = ContentValues().apply {
             put("location_key", locationKey)
@@ -678,7 +831,7 @@ class TemperatureDatabase(context: Context) : SQLiteOpenHelper(
 
     companion object {
         private const val DATABASE_NAME = "templearn_local.db"
-        private const val DATABASE_VERSION = 12
+        private const val DATABASE_VERSION = 13
     }
 }
 
