@@ -30,9 +30,14 @@ object DailySyncScheduler {
         enqueueNext(context, ExistingWorkPolicy.REPLACE)
     }
 
-    /** The worker appends tomorrow's noon run to its currently running unique-work chain. */
+    /** Chain tomorrow's run after a successful sync. */
     fun enqueueNextAfterCurrent(context: Context) {
         enqueueNext(context, ExistingWorkPolicy.APPEND_OR_REPLACE)
+    }
+
+    /** On terminal failure, replace the exhausted job with tomorrow's scheduled run. */
+    fun scheduleAfterTerminalFailure(context: Context) {
+        enqueueNext(context, ExistingWorkPolicy.REPLACE)
     }
 
     private fun enqueueNext(context: Context, policy: ExistingWorkPolicy) {
@@ -86,7 +91,7 @@ class DailySyncWorker(
             if (runAttemptCount < 3) {
                 Result.retry()
             } else {
-                DailySyncScheduler.enqueueNextAfterCurrent(applicationContext)
+                DailySyncScheduler.scheduleAfterTerminalFailure(applicationContext)
                 Result.failure()
             }
         }

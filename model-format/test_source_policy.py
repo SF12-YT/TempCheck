@@ -18,18 +18,30 @@ HOURLY_FIELDS = (
 
 
 class SourcePolicyTests(unittest.TestCase):
-    def test_archive_uses_exact_15_hourly_fields_and_best_match(self):
+    def test_archive_and_forecast_use_the_exact_15_hourly_fields(self):
         client = (KOTLIN / "OpenMeteoClient.kt").read_text(encoding="utf-8")
-        self.assertIn("models=best_match", client)
-        self.assertIn("format=csv", client)
+        archive = client.split("fun downloadHourlyArchiveToFile", 1)[1].split(
+            "fun downloadRecentHourlyForecastToFile", 1
+        )[0]
+        forecast = client.split("fun downloadRecentHourlyForecastToFile", 1)[1].split(
+            "private fun downloadCsvToFile", 1
+        )[0]
+        self.assertIn("models=best_match", archive)
+        self.assertIn("format=csv", archive)
+        self.assertNotIn("past_days=", archive)
+        self.assertIn("https://api.open-meteo.com/v1/forecast", forecast)
+        self.assertIn("&past_days=1&forecast_days=0", forecast)
+        self.assertIn("&timeformat=unixtime", forecast)
+        self.assertIn("&format=csv", forecast)
         self.assertIn("&hourly=", client)
         self.assertNotIn("&daily=", client)
-        self.assertNotIn("past_days=", client)
         start = client.index("private val hourlyFields")
         end = client.index("    )", start)
         selected = re.findall(r'"([a-z0-9_]+)"', client[start:end])
         self.assertEqual(tuple(selected), HOURLY_FIELDS)
         self.assertEqual(len(selected), 15)
+        self.assertIn("DEFAULT_LATITUDE = -33.6153", client)
+        self.assertIn("DEFAULT_LONGITUDE = 150.2665", client)
 
     def test_archive_streams_csv_and_json_and_preserves_missing_fields(self):
         client = (KOTLIN / "OpenMeteoClient.kt").read_text(encoding="utf-8")
@@ -65,13 +77,14 @@ class SourcePolicyTests(unittest.TestCase):
         self.assertNotIn("KEY_STATION_", sync)
         self.assertNotIn("KEY_ONE_FILE_ARCHIVE_SETUP_COMPLETE", sync)
 
-    def test_archive_end_date_is_capped_to_latest_available_utc_day(self):
+    def test_archive_backfill_is_capped_and_recurring_sync_uses_forecast_api(self):
         sync = (KOTLIN / "SyncRepository.kt").read_text(encoding="utf-8")
         self.assertIn('LocalDate.now(ZoneId.of("UTC")).minusDays(1)', sync)
         self.assertIn("val archiveEndDate = minOf(LocalDate.now(zone), LocalDate.now(ZoneId.of(\"UTC\")).minusDays(1))", sync)
-        self.assertEqual(sync.count("start, archiveEndDate,"), 1)
-        self.assertIn("minOf(latestDate ?: archiveEndDate, archiveEndDate)", sync)
-        self.assertIn("importedToDate = archiveEndDate.toString()", sync)
+        self.assertIn("startDate, archiveEndDate,", sync)
+        self.assertNotIn("minOf(latestDate ?: archiveEndDate, archiveEndDate)", sync)
+        self.assertIn("downloadRecentHourlyForecastToFile", sync)
+        self.assertIn("latest_forecast_update.csv", sync)
 
     def test_reduced_archive_invalidates_models_after_reimport(self):
         sync = (KOTLIN / "SyncRepository.kt").read_text(encoding="utf-8")
@@ -81,6 +94,25 @@ class SourcePolicyTests(unittest.TestCase):
         self.assertIn("open_meteo_best_match_2000_present_v3.csv", sync)
         self.assertIn("open_meteo_best_match_2000_present.csv", sync)
         self.assertIn("open_meteo_best_match_full_history.json", sync)
+
+    def test_overlapping_hourly_timestamps_are_ignored(self):
+        database = (KOTLIN / "TemperatureDatabase.kt").read_text(encoding="utf-8")
+        sync = (KOTLIN / "SyncRepository.kt").read_text(encoding="utf-8")
+        self.assertIn("SQLiteDatabase.CONFLICT_IGNORE", database)
+        self.assertIn("fun insertReadingsIfAbsent", database)
+        self.assertGreaterEqual(sync.count("db.insertReadingsIfAbsent(locationKey, batch)"), 3)
+        self.assertIn("PRIMARY KEY(location_key, timestamp_sec)", database)
+
+    def test_background_sync_is_scheduled_for_local_noon(self):
+        worker = (KOTLIN / "DailySyncWorker.kt").read_text(encoding="utf-8")
+        main = (KOTLIN / "MainActivity.kt").read_text(encoding="utf-8")
+        self.assertIn("OneTimeWorkRequestBuilder<DailySyncWorker>()", worker)
+        self.assertIn("atTime(12, 0)", worker)
+        self.assertIn("NetworkType.CONNECTED", worker)
+        self.assertIn("enqueueUniqueWork", worker)
+        self.assertIn("APPEND_OR_REPLACE", worker)
+        self.assertIn("DailySyncScheduler.ensureScheduled(applicationContext)", main)
+        self.assertIn("DailySyncScheduler.rescheduleForLocation(applicationContext)", main)
 
     def test_database_discards_legacy_provider_data_on_upgrade(self):
         database = (KOTLIN / "TemperatureDatabase.kt").read_text(encoding="utf-8")

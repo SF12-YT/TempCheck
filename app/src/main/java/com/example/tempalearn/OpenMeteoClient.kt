@@ -406,7 +406,7 @@ object OpenMeteoClient {
                 instanceFollowRedirects = true
                 setRequestProperty("Accept", "application/json")
                 setRequestProperty("Accept-Encoding", "identity")
-                setRequestProperty("User-Agent", "TempLearn-Android/0.9.4")
+                setRequestProperty("User-Agent", "TempLearn-Android/0.9.6")
             }
             try {
                 val code = connection.responseCode
@@ -645,7 +645,7 @@ object OpenMeteoClient {
         val connection=(url.openConnection() as HttpURLConnection).apply{
             requestMethod="GET";connectTimeout=12_000;readTimeout=18_000
             setRequestProperty("Accept","application/json")
-            setRequestProperty("User-Agent","TempLearn-Android/0.9.4")
+            setRequestProperty("User-Agent","TempLearn-Android/0.9.6")
         }
         try{
             val code=connection.responseCode
