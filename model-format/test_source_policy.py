@@ -110,14 +110,31 @@ class SourcePolicyTests(unittest.TestCase):
         self.assertNotIn("KEY_STATION_", sync)
         self.assertNotIn("KEY_ONE_FILE_ARCHIVE_SETUP_COMPLETE", sync)
 
-    def test_archive_backfill_is_capped_and_recurring_sync_uses_forecast_api(self):
+    def test_archive_backfill_is_capped_and_recent_forecast_is_separate_best_effort_step(self):
         sync = (KOTLIN / "SyncRepository.kt").read_text(encoding="utf-8")
         self.assertIn('LocalDate.now(ZoneId.of("UTC")).minusDays(1)', sync)
         self.assertIn("val archiveEndDate = minOf(LocalDate.now(zone), LocalDate.now(ZoneId.of(\"UTC\")).minusDays(1))", sync)
         self.assertIn("startDate, archiveEndDate,", sync)
         self.assertNotIn("minOf(latestDate ?: archiveEndDate, archiveEndDate)", sync)
+        self.assertIn("private fun refreshRecentForecastDataset", sync)
         self.assertIn("downloadRecentHourlyForecastToFile", sync)
         self.assertIn("latest_forecast_update.csv", sync)
+        historical = sync.split("fun downloadHistoricalDataset", 1)[1].split("private fun refreshRecentForecastDataset", 1)[0]
+        self.assertNotIn("downloadRecentHourlyForecastToFile", historical)
+        self.assertLess(sync.index('putBoolean(completeKey, true)'), sync.index("private fun refreshRecentForecastDataset"))
+        orchestration = sync.split("fun sync(", 1)[1]
+        self.assertLess(orchestration.index("pretrainHistoricalDataset"), orchestration.index("refreshRecentForecastDataset"))
+        self.assertIn("catch (error: Exception)", orchestration)
+        self.assertIn("recentUpdateWarning", orchestration)
+
+    def test_historical_json_is_trained_before_optional_recent_csv(self):
+        sync = (KOTLIN / "SyncRepository.kt").read_text(encoding="utf-8")
+        orchestration = sync.split("fun sync(", 1)[1]
+        self.assertIn("downloaded.initialImportCompletedNow || existingLocalModel == null", orchestration)
+        self.assertLess(orchestration.index("pretrainHistoricalDataset"), orchestration.index("refreshRecentForecastDataset"))
+        main = (KOTLIN / "MainActivity.kt").read_text(encoding="utf-8")
+        self.assertIn("historical learning is retained", main)
+        self.assertIn("recentUpdateWarning", main)
 
     def test_reduced_archive_invalidates_models_after_reimport(self):
         sync = (KOTLIN / "SyncRepository.kt").read_text(encoding="utf-8")
