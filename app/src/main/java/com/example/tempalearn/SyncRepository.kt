@@ -335,13 +335,18 @@ object SyncRepository {
                 throw java.io.IOException("Could not create the local recent-data folder.")
             }
 
-            // This request deliberately overlaps the historical archive. Existing timestamps
-            // are ignored by the database primary key; only genuinely new hours are inserted.
-            val recentForecastFile = File(archiveDirectory, "latest_forecast_update.csv")
+            // Request both complete local calendar days. The archive may already contain all of
+            // yesterday, but the database skips those timestamps and accepts any missing hours
+            // from yesterday plus the hours available for today.
+            val today = LocalDate.now(ZoneId.of(profile.timezoneId))
+            val yesterday = today.minusDays(1)
+            val recentForecastFile = File(archiveDirectory, "recent_forecast_yesterday_today.csv")
             OpenMeteoClient.downloadRecentHourlyForecastToFile(
                 profile.latitude,
                 profile.longitude,
                 profile.timezoneId,
+                yesterday,
+                today,
                 recentForecastFile
             ) { transfer ->
                 onProgress(
