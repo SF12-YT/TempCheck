@@ -267,7 +267,7 @@ class MainActivity : Activity() {
         historyRows = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         historyCard.addView(historyRows, LinearLayout.LayoutParams(-1, -2))
 
-        val attribution = "Historical hourly temperature targets and predictors: Open-Meteo Historical Weather API, Best Match reanalysis. The default location's complete published JSON archive is downloaded once, imported into local storage, used for historical training, and then deleted to reclaim space. Other locations use a matching Open-Meteo archive download; later syncs update the latest available date. Missing values remain missing. Weather data by Open-Meteo.com (CC BY 4.0). Reanalysis is modelled historical weather, not a local station observation. Validation uses later unseen hours and is not a guarantee of forecast accuracy."
+        val attribution = "Historical hourly temperature targets and predictors: Open-Meteo Historical Weather API, Best Match reanalysis. The default location's complete published JSON archive is downloaded once, imported into local storage, used for historical training, and then deleted to reclaim space. Other locations use a matching Open-Meteo archive download; later syncs update the latest available date. Missing values remain missing. Weather data by Open-Meteo.com (CC BY 4.0). Reanalysis is modelled historical weather, not a local station observation. Validation uses later unseen hours and is not a guarantee of forecast accuracy. The feedback correction compares completed predictions with later matching Open-Meteo Best Match hourly values; these are not independent station observations."
         addText(content, attribution, 11f, mutedColor, false).apply {
             val attributedText = android.text.SpannableString(attribution)
             val providerStart = attribution.indexOf("Open-Meteo.com")
@@ -559,12 +559,12 @@ class MainActivity : Activity() {
                 val feedbackDescription = if (predicted.verifiedPredictions >= PredictionErrorLearner.MINIMUM_VERIFIED_PREDICTIONS) {
                     String.format(
                         Locale.getDefault(),
-                        "Feedback correction %+.1f°C · %d verified forecasts",
+                        "Feedback correction %+.1f°C · %d matched forecasts",
                         predicted.correctionC,
                         predicted.verifiedPredictions
                     )
                 } else {
-                    "Learning from verified forecasts ${predicted.verifiedPredictions}/${PredictionErrorLearner.MINIMUM_VERIFIED_PREDICTIONS}"
+                    "Learning from matched forecasts ${predicted.verifiedPredictions}/${PredictionErrorLearner.MINIMUM_VERIFIED_PREDICTIONS}"
                 }
                 predictionSubtext.text = "$modelDescription · ${formatter.format(localTime)} local time · $feedbackDescription"
             } else {
