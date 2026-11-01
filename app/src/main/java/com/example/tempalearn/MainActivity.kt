@@ -652,7 +652,7 @@ class MainActivity : Activity() {
         val locationKey = AppPreferences.activeLocationKey(prefs, location)
         val initialImportNeeded = !prefs.getBoolean(AppPreferences.historyCompleteKey(locationKey), false)
         statusText.text = if (initialImportNeeded) {
-            "Downloading and importing the complete Open-Meteo historical archive, then training from it before the recent hourly refresh…"
+            "Downloading the complete Open-Meteo historical archive, importing it, and training from it before the recent hourly refresh…"
         } else {
             "Refreshing recent Open-Meteo hours and updating the local model…"
         }
