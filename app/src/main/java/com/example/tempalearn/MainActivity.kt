@@ -556,15 +556,17 @@ class MainActivity : Activity() {
                 val formatter = DateTimeFormatter.ofPattern("EEE, d MMM · h:mm a", Locale.US)
                 val localTime = Instant.ofEpochSecond(predicted.targetTimestampSec).atZone(ZoneId.of(zoneId))
                 val modelDescription = if (model != null) "Location-adapted estimate" else "Shared-model estimate · adapting to this location"
-                val feedbackDescription = if (predicted.verifiedPredictions >= PredictionErrorLearner.MINIMUM_VERIFIED_PREDICTIONS) {
-                    String.format(
+                val pendingPredictions = db.getPendingPredictionCount(locationKey)
+                val feedbackDescription = when {
+                    predicted.verifiedPredictions > 0 -> String.format(
                         Locale.getDefault(),
-                        "Feedback correction %+.1f°C · %d matched forecasts",
+                        "%d verified forecasts · feedback correction %+.1f°C · %d pending",
+                        predicted.verifiedPredictions,
                         predicted.correctionC,
-                        predicted.verifiedPredictions
+                        pendingPredictions
                     )
-                } else {
-                    "Verified forecasts ${predicted.verifiedPredictions}/${PredictionErrorLearner.MINIMUM_VERIFIED_PREDICTIONS} · awaiting target-hour observations"
+                    pendingPredictions > 0 -> "$pendingPredictions forecast(s) pending an hourly reading"
+                    else -> "0 verified · no completed forecast checks yet"
                 }
                 predictionSubtext.text = "$modelDescription · ${formatter.format(localTime)} local time · $feedbackDescription"
             } else {
