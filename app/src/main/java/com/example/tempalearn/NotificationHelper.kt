@@ -30,11 +30,19 @@ object NotificationHelper {
             else "Latest local date refreshed"
         val model = if (result.modelReady) "Model updated · ${result.trainingExamples} local examples"
             else "Weather saved · more consecutive hours are needed for local learning"
-        val body = "${result.resolvedAddress}: $phase · ${result.fetchedHours} fetched/updated hourly rows · ${result.savedReadings} stored rows. $model."
+        val warning = result.recentUpdateWarning?.let {
+            "Recent hourly refresh failed; historical learning was retained and the app will retry. $it"
+        }.orEmpty()
+        val body = "${result.resolvedAddress}: $phase · ${result.fetchedHours} fetched/updated hourly rows · ${result.savedReadings} stored rows. $model. $warning"
+        val title = when {
+            result.recentUpdateWarning != null -> "TempLearn history ready; recent refresh pending"
+            source == "daily" -> "TempLearn hourly update complete"
+            else -> "TempLearn history update complete"
+        }
         val builder = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) android.app.Notification.Builder(context, CHANNEL_ID)
             else { @Suppress("DEPRECATION") android.app.Notification.Builder(context) }
         val notification = builder.setSmallIcon(android.R.drawable.ic_dialog_info)
-            .setContentTitle(if (source == "daily") "TempLearn hourly update complete" else "TempLearn history update complete")
+            .setContentTitle(title)
             .setContentText(body.take(180))
             .setStyle(android.app.Notification.BigTextStyle().bigText(body))
             .setAutoCancel(true)
