@@ -68,7 +68,7 @@ class SourcePolicyTests(unittest.TestCase):
     def test_archive_end_date_is_capped_to_latest_available_utc_day(self):
         sync = (KOTLIN / "SyncRepository.kt").read_text(encoding="utf-8")
         self.assertIn('LocalDate.now(ZoneId.of("UTC")).minusDays(1)', sync)
-        self.assertIn("val archiveEndDate = minOf(today, LocalDate.now(ZoneId.of(\"UTC\")).minusDays(1))", sync)
+        self.assertIn("val archiveEndDate = minOf(LocalDate.now(zone), LocalDate.now(ZoneId.of(\"UTC\")).minusDays(1))", sync)
         self.assertEqual(sync.count("start, archiveEndDate,"), 1)
         self.assertIn("minOf(latestDate ?: archiveEndDate, archiveEndDate)", sync)
         self.assertIn("importedToDate = archiveEndDate.toString()", sync)
