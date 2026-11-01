@@ -186,14 +186,18 @@ object SyncRepository {
                 throw java.io.IOException("Could not create the local historical dataset folder.")
             }
 
-            // Keep the complete historical source locally. Recent data is fetched separately,
-            // then inserted only for timestamps that do not already exist in this location.
+            // The JSON/CSV file is an import source, not the app's permanent data store.
+            // Once imported, the full hourly series is stored in SQLite and the file may be deleted.
+            // Recent data is fetched separately and inserted only for previously unseen timestamps.
             val archiveFile = File(
                 archiveDirectory,
                 if (usePublishedJson) "open_meteo_best_match_full_history.json"
                 else "open_meteo_best_match_2000_present_v3.csv"
             )
-            val initialNeeded = !prefs.getBoolean(completeKey, false) || !archiveFile.isFile || archiveFile.length() <= 0L
+            // Completion is recorded only after a successful full import. Do not make the source
+            // file's continued presence a requirement: the user may remove the JSON to reclaim storage.
+            val historyComplete = prefs.getBoolean(completeKey, false)
+            val initialNeeded = !historyComplete
             var fetchedRows = 0
             var importedFromDate = LocalDate.now(zone).minusDays(1).toString()
             var importedToDate = LocalDate.now(zone).toString()
@@ -335,18 +339,14 @@ object SyncRepository {
                 throw java.io.IOException("Could not create the local recent-data folder.")
             }
 
-            // Request both complete local calendar days. The archive may already contain all of
-            // yesterday, but the database skips those timestamps and accepts any missing hours
-            // from yesterday plus the hours available for today.
-            val today = LocalDate.now(ZoneId.of(profile.timezoneId))
-            val yesterday = today.minusDays(1)
-            val recentForecastFile = File(archiveDirectory, "recent_forecast_yesterday_today.csv")
+            // Fetch only the rolling 24 hours before the current local hour, never forecast hours.
+            // The SQLite primary key plus CONFLICT_IGNORE prevents overlapping timestamps from
+            // being inserted or counted as new training data.
+            val recentForecastFile = File(archiveDirectory, "recent_forecast_past_24h.csv")
             OpenMeteoClient.downloadRecentHourlyForecastToFile(
                 profile.latitude,
                 profile.longitude,
                 profile.timezoneId,
-                yesterday,
-                today,
                 recentForecastFile
             ) { transfer ->
                 onProgress(

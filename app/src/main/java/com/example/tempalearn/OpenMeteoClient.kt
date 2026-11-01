@@ -91,27 +91,25 @@ object OpenMeteoClient {
     }
 
     /**
-     * Uses the user's rolling-refresh endpoint: previous local day, no future forecast hours.
-     * The extra CSV/time parameters keep timestamps compatible with TempLearn's Unix-time parser.
+     * Downloads only the rolling 24 hours before the current local hour.
+     * forecast_hours=0 prevents future forecast timestamps from entering the training dataset.
+     * Existing timestamps are ignored by the database when the CSV is imported.
      */
     @Throws(IOException::class)
     fun downloadRecentHourlyForecastToFile(
         latitude: Double,
         longitude: Double,
         timezoneId: String,
-        startDate: LocalDate,
-        endDate: LocalDate,
         destination: File,
         onProgress: (ArchiveFileProgress) -> Unit = {}
     ): File {
         require(latitude.isFinite() && latitude in -90.0..90.0)
         require(longitude.isFinite() && longitude in -180.0..180.0)
-        require(!endDate.isBefore(startDate)) { "The recent-data end date precedes its start date." }
         ZoneId.of(timezoneId)
         val timezone = URLEncoder.encode(timezoneId, Charsets.UTF_8.name())
         val url = URL(
             "https://api.open-meteo.com/v1/forecast?latitude=$latitude&longitude=$longitude" +
-                "&hourly=${hourlyFields.joinToString(",")}&start_date=$startDate&end_date=$endDate" +
+                "&hourly=${hourlyFields.joinToString(",")}&past_hours=24&forecast_hours=0" +
                 "&timezone=$timezone&models=best_match&timeformat=unixtime" +
                 "&temperature_unit=celsius&wind_speed_unit=kmh&precipitation_unit=mm&format=csv"
         )
@@ -137,7 +135,7 @@ object OpenMeteoClient {
                 readTimeout = 180_000
                 setRequestProperty("Accept", "text/csv")
                 setRequestProperty("Accept-Encoding", "identity")
-                setRequestProperty("User-Agent", "TempLearn-Android/0.10.0")
+                setRequestProperty("User-Agent", "TempLearn-Android/0.10.1")
             }
             try {
                 val code = connection.responseCode
@@ -395,8 +393,9 @@ object OpenMeteoClient {
 
     /**
      * Downloads the immutable, complete Open-Meteo JSON archive published for TempLearn's
-     * default 2780 location. The unmodified JSON is retained locally. Its SHA-256 is checked
-     * before the .part file is atomically promoted, so incomplete or replaced assets are rejected.
+     * default 2780 location. Its SHA-256 is checked before the .part file is atomically promoted,
+     * so incomplete or replaced assets are rejected. Imported readings are persisted in SQLite;
+     * the source JSON is only needed until the historical import has completed.
      */
     @Throws(IOException::class)
     fun downloadHistoricalJsonToFile(
@@ -416,7 +415,7 @@ object OpenMeteoClient {
                 instanceFollowRedirects = true
                 setRequestProperty("Accept", "application/json")
                 setRequestProperty("Accept-Encoding", "identity")
-                setRequestProperty("User-Agent", "TempLearn-Android/0.9.6")
+                setRequestProperty("User-Agent", "TempLearn-Android/0.10.1")
             }
             try {
                 val code = connection.responseCode

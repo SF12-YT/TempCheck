@@ -77,7 +77,7 @@ class SourcePolicyTests(unittest.TestCase):
         self.assertIn('splitCsv(line).mapIndexed(::normalizeCsvHeaderCell)', client)
         self.assertIn('header = normalizedCells', client)
         self.assertIn('Header preview:', client)
-        self.assertIn('versionName = "0.10.0"', (ROOT / "app/build.gradle.kts").read_text(encoding="utf-8"))
+        self.assertIn('versionName = "0.10.1"', (ROOT / "app/build.gradle.kts").read_text(encoding="utf-8"))
 
     def test_archive_streams_csv_and_json_and_preserves_missing_fields(self):
         client = (KOTLIN / "OpenMeteoClient.kt").read_text(encoding="utf-8")
@@ -91,7 +91,7 @@ class SourcePolicyTests(unittest.TestCase):
         self.assertIn("downloadHistoricalJsonToFile", client)
         self.assertIn('?: continue', client)
 
-    def test_default_location_imports_the_retained_json_snapshot_once(self):
+    def test_default_location_imports_the_json_snapshot_once(self):
         sync = (KOTLIN / "SyncRepository.kt").read_text(encoding="utf-8")
         client = (KOTLIN / "OpenMeteoClient.kt").read_text(encoding="utf-8")
         self.assertIn("historyCompleteKey", sync)
@@ -121,10 +121,8 @@ class SourcePolicyTests(unittest.TestCase):
         self.assertNotIn("minOf(latestDate ?: archiveEndDate, archiveEndDate)", sync)
         self.assertIn("private fun refreshRecentForecastDataset", sync)
         self.assertIn("downloadRecentHourlyForecastToFile", sync)
-        self.assertIn("recent_forecast_yesterday_today.csv", sync)
-        self.assertIn('val today = LocalDate.now(ZoneId.of(profile.timezoneId))', sync)
-        self.assertIn("val yesterday = today.minusDays(1)", sync)
-        self.assertIn("yesterday,\n                today,", sync)
+        self.assertIn("recent_forecast_past_24h.csv", sync)
+        self.assertNotIn("recent_forecast_yesterday_today.csv", sync)
         historical = sync.split("fun downloadHistoricalDataset", 1)[1].split("private fun refreshRecentForecastDataset", 1)[0]
         self.assertNotIn("downloadRecentHourlyForecastToFile", historical)
         self.assertLess(sync.index('putBoolean(completeKey, true)'), sync.index("private fun refreshRecentForecastDataset"))
@@ -133,24 +131,34 @@ class SourcePolicyTests(unittest.TestCase):
         self.assertIn("catch (error: Exception)", orchestration)
         self.assertIn("recentUpdateWarning", orchestration)
 
-    def test_recent_forecast_fetches_yesterday_and_today_using_location_timezone(self):
+    def test_recent_forecast_requests_only_the_previous_24_hours(self):
         client = (KOTLIN / "OpenMeteoClient.kt").read_text(encoding="utf-8")
         forecast = client.split("fun downloadRecentHourlyForecastToFile", 1)[1].split(
             "private fun downloadCsvToFile", 1
         )[0]
-        self.assertIn("startDate: LocalDate", forecast)
-        self.assertIn("endDate: LocalDate", forecast)
-        self.assertIn("&start_date=$startDate&end_date=$endDate", forecast)
-        self.assertIn("require(!endDate.isBefore(startDate))", forecast)
+        self.assertIn("&past_hours=24&forecast_hours=0", forecast)
+        self.assertNotIn("start_date=", forecast)
+        self.assertNotIn("end_date=", forecast)
+        self.assertIn("&models=best_match", forecast)
+        self.assertIn("&timeformat=unixtime", forecast)
 
         sync = (KOTLIN / "SyncRepository.kt").read_text(encoding="utf-8")
         refresh = sync.split("private fun refreshRecentForecastDataset", 1)[1].split(
             "fun pretrainHistoricalDataset", 1
         )[0]
-        self.assertIn('LocalDate.now(ZoneId.of(profile.timezoneId))', refresh)
-        self.assertIn("val yesterday = today.minusDays(1)", refresh)
-        self.assertIn("profile.timezoneId,\n                yesterday,\n                today,", refresh)
+        self.assertIn("profile.timezoneId,\n                recentForecastFile", refresh)
+        self.assertNotIn("val yesterday =", refresh)
         self.assertIn("db.insertReadingsIfAbsent(locationKey, batch)", refresh)
+
+    def test_completed_history_can_be_kept_in_sqlite_without_the_source_json(self):
+        sync = (KOTLIN / "SyncRepository.kt").read_text(encoding="utf-8")
+        self.assertIn("val historyComplete = prefs.getBoolean(completeKey, false)", sync)
+        self.assertIn("val initialNeeded = !historyComplete", sync)
+        self.assertNotIn("|| !archiveFile.isFile", sync)
+        database = (KOTLIN / "TemperatureDatabase.kt").read_text(encoding="utf-8")
+        self.assertIn('writable.insertWithOnConflict("readings"', database)
+        self.assertIn('writableDatabase.insertWithOnConflict("model_state"', database)
+        self.assertIn("fun getAllReadingsByLocation()", database)
 
     def test_historical_json_is_trained_before_optional_recent_csv(self):
         sync = (KOTLIN / "SyncRepository.kt").read_text(encoding="utf-8")
