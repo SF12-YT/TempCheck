@@ -14,14 +14,6 @@ object AppPreferences {
     const val DEFAULT_LOCATION = "2780, NSW, Australia"
     const val SHARED_MODEL_KEY = "__templearn_shared_weather_model__"
     const val KEY_NOTIFICATION_PERMISSION_REQUESTED = "notification_permission_requested"
-    const val KEY_INITIAL_SETUP_COMPLETE = "initial_setup_complete_v2"
-    const val KEY_ONE_FILE_ARCHIVE_SETUP_COMPLETE = "one_file_archive_setup_complete_v2"
-    const val KEY_STATION_MODE = "bom_station_mode"
-    const val KEY_STATION_WMO_ID = "bom_station_wmo_id"
-    const val KEY_STATION_NAME = "bom_station_name"
-    const val KEY_STATION_DISTANCE_KM = "bom_station_distance_km"
-    const val KEY_STATION_TEMP_C = "bom_station_temp_c"
-    const val KEY_STATION_TIME_SEC = "bom_station_time_sec"
 
     fun locationKey(location: String) = location.trim().replace(Regex("\\s+"), " ").lowercase(Locale.US)
     fun geocodedLocationKey(geocodingId: Long) = "geo:$geocodingId"
@@ -33,8 +25,8 @@ object AppPreferences {
     fun latitudeKey(locationKey: String) = "latitude_$locationKey"
     fun longitudeKey(locationKey: String) = "longitude_$locationKey"
     fun elevationKey(locationKey: String) = "elevation_$locationKey"
-    // v2 forces a one-time re-download because earlier releases stored 27 hourly fields.
-    fun historyCompleteKey(locationKey: String) = "open_meteo_history_file_complete_v2_$locationKey"
+    // v3 marks the JSON archive snapshot as fully imported on this device.
+    fun historyCompleteKey(locationKey: String) = "open_meteo_history_file_complete_v3_$locationKey"
 }
 
 enum class ArchiveProgressStage { DOWNLOADING, IMPORTING }
@@ -80,8 +72,9 @@ data class SyncResult(
 
 object SyncRepository {
     /**
-     * Download the historical archive only. Training is deliberately a separate operation so a
-     * user can inspect download completion and explicitly start the first local fit.
+     * Import the published complete JSON snapshot for the default location. The original JSON is
+     * retained unchanged on-device. Other locations retain the one-file Open-Meteo CSV path.
+     * Subsequent syncs update only the latest available date from Open-Meteo Archive API.
      */
     @Throws(Exception::class)
     fun downloadHistoricalDataset(
@@ -124,10 +117,7 @@ object SyncRepository {
                 .apply()
 
             val zone = ZoneId.of(profile.timezoneId)
-            val today = LocalDate.now(zone)
-            // The Historical Weather API does not accept the current UTC date yet.
-            // Cap the requested end date at yesterday UTC (and never beyond local today).
-            val archiveEndDate = minOf(today, LocalDate.now(ZoneId.of("UTC")).minusDays(1))
+            val archiveEndDate = minOf(LocalDate.now(zone), LocalDate.now(ZoneId.of("UTC")).minusDays(1))
             val completeKey = AppPreferences.historyCompleteKey(locationKey)
             val archiveDirectory = File(
                 app.filesDir,
@@ -137,25 +127,80 @@ object SyncRepository {
                 throw java.io.IOException("Could not create the local historical dataset folder.")
             }
 
-            // The initial CSV is retained inside TempLearn's private on-device files directory.
-            // Older versions used segmented HTTP responses, so the new completion key forces a
-            // one-time full-file download/import when upgrading from those versions.
-            val archiveFile = File(archiveDirectory, "open_meteo_best_match_2000_present_v2.csv")
+            // The published JSON is the full 2000-10/31/2026 snapshot for the app's default
+            // 2780 location. Other locations receive a matching full-range CSV from Open-Meteo.
+            val usePublishedJson = normalized.equals(AppPreferences.DEFAULT_LOCATION, ignoreCase = true)
+            val archiveFile = File(
+                archiveDirectory,
+                if (usePublishedJson) "open_meteo_best_match_full_history.json"
+                else "open_meteo_best_match_2000_present_v3.csv"
+            )
             val initialNeeded = !prefs.getBoolean(completeKey, false) || !archiveFile.isFile || archiveFile.length() <= 0L
             val latest = db.getLatestTimestampSec(locationKey)
             val latestDate = latest?.let { Instant.ofEpochSecond(it).atZone(zone).toLocalDate() }
-            // Existing data may include today's station readings; never let that push the
-            // Open-Meteo archive start beyond its currently available end date.
-            val start = if (initialNeeded) LocalDate.of(2000, 1, 1) else minOf(latestDate ?: archiveEndDate, archiveEndDate)
-            val importFile: File
+            var fetchedRows: Int
+            var importedFromDate: String
+            var importedToDate: String
 
-            if (initialNeeded) {
-                // A previous attempt may have completed the local file but failed while importing.
-                // In that case reuse the complete CSV and do not download it again.
+            if (initialNeeded && usePublishedJson) {
+                // A completed JSON download is reused after an interrupted or failed database import.
                 if (!archiveFile.isFile || archiveFile.length() <= 0L) {
+                    OpenMeteoClient.downloadHistoricalJsonToFile(archiveFile) { transfer ->
+                        onProgress(
+                            ArchiveDownloadProgress(
+                                ArchiveProgressStage.DOWNLOADING,
+                                transfer.bytesTransferred,
+                                transfer.totalBytes
+                            )
+                        )
+                    }
+                }
+                val imported = OpenMeteoClient.importHourlyArchiveJsonFile(
+                    archiveFile,
+                    onBatch = { batch -> db.insertReadings(locationKey, batch) },
+                    onProgress = { transfer ->
+                        onProgress(
+                            ArchiveDownloadProgress(
+                                ArchiveProgressStage.IMPORTING,
+                                transfer.bytesTransferred,
+                                transfer.totalBytes
+                            )
+                        )
+                    }
+                )
+                fetchedRows = imported.importedRows
+                val archiveZone = imported.metadata.timezoneId?.let { runCatching { ZoneId.of(it) }.getOrNull() } ?: zone
+                importedFromDate = Instant.ofEpochSecond(imported.firstTimestampSec).atZone(archiveZone).toLocalDate().toString()
+                importedToDate = Instant.ofEpochSecond(imported.lastTimestampSec).atZone(archiveZone).toLocalDate().toString()
+
+                // Use the exact grid point and timezone reported by the JSON, not the postcode
+                // centroid returned by geocoding, so model location metadata matches its data.
+                val metadata = imported.metadata
+                if (metadata.latitude != null && metadata.longitude != null) {
+                    profile = profile.copy(
+                        latitude = metadata.latitude,
+                        longitude = metadata.longitude,
+                        elevationM = metadata.elevationM ?: profile.elevationM,
+                        timezoneId = metadata.timezoneId ?: profile.timezoneId
+                    )
+                    db.saveLocationProfile(profile)
+                    prefs.edit()
+                        .putString(AppPreferences.timezoneKey(locationKey), profile.timezoneId)
+                        .putString(AppPreferences.latitudeKey(locationKey), profile.latitude.toString())
+                        .putString(AppPreferences.longitudeKey(locationKey), profile.longitude.toString())
+                        .putString(AppPreferences.elevationKey(locationKey), profile.elevationM?.toString())
+                        .apply()
+                }
+            } else {
+                // Incremental refreshes only re-read the latest stored date; new locations still
+                // receive one complete CSV file from 1 January 2000, never segmented downloads.
+                val start = if (initialNeeded) LocalDate.of(2000, 1, 1)
+                    else minOf(latestDate ?: archiveEndDate, archiveEndDate)
+                val importFile = if (initialNeeded) archiveFile else File(archiveDirectory, "latest_update.csv")
+                if (!importFile.isFile || importFile.length() <= 0L || !initialNeeded) {
                     OpenMeteoClient.downloadHourlyArchiveToFile(
                         profile.latitude, profile.longitude, profile.timezoneId, profile.elevationM,
-                        start, archiveEndDate, archiveFile
+                        start, archiveEndDate, importFile
                     ) { transfer ->
                         onProgress(
                             ArchiveDownloadProgress(
@@ -166,59 +211,37 @@ object SyncRepository {
                         )
                     }
                 }
-                importFile = archiveFile
-            } else {
-                // Routine refreshes are also single-file, single-request downloads. The long
-                // historical archive remains intact; this small latest-date CSV is imported locally.
-                val latestFile = File(archiveDirectory, "latest_update.csv")
-                OpenMeteoClient.downloadHourlyArchiveToFile(
-                    profile.latitude, profile.longitude, profile.timezoneId, profile.elevationM,
-                    start, archiveEndDate, latestFile
-                ) { transfer ->
-                    onProgress(
-                        ArchiveDownloadProgress(
-                            ArchiveProgressStage.DOWNLOADING,
-                            transfer.bytesTransferred,
-                            transfer.totalBytes
+                fetchedRows = OpenMeteoClient.importHourlyArchiveFile(
+                    importFile,
+                    onBatch = { batch -> db.insertReadings(locationKey, batch) },
+                    onProgress = { transfer ->
+                        onProgress(
+                            ArchiveDownloadProgress(
+                                ArchiveProgressStage.IMPORTING,
+                                transfer.bytesTransferred,
+                                transfer.totalBytes
+                            )
                         )
-                    )
-                }
-                importFile = latestFile
+                    }
+                )
+                importedFromDate = start.toString()
+                importedToDate = archiveEndDate.toString()
             }
 
-            val importedTotal = OpenMeteoClient.importHourlyArchiveFile(
-                importFile,
-                onBatch = { batch -> db.insertReadings(locationKey, batch) },
-                onProgress = { transfer ->
-                    onProgress(
-                        ArchiveDownloadProgress(
-                            ArchiveProgressStage.IMPORTING,
-                            transfer.bytesTransferred,
-                            transfer.totalBytes
-                        )
-                    )
-                }
-            )
-
-            // A dataset is marked ready only after the entire local CSV has been imported.
-            // The first-run CSV is retained as the on-device archive, separate from training.
             if (initialNeeded) {
-                // Input features changed from the 27-field archive to the selected 15-field set.
-                // Old local/shared coefficients must be retrained against the replacement dataset.
                 db.clearModels()
                 prefs.edit().putBoolean(completeKey, true).apply()
-                // The 15-field archive is safely imported; now remove the previous 27-field CSV.
                 File(archiveDirectory, "open_meteo_best_match_2000_present.csv").delete()
             }
             prefs.edit().putLong(AppPreferences.syncTimeKey(locationKey), Instant.now().epochSecond).apply()
             return DatasetDownloadResult(
                 locationKey = locationKey,
-                fetchedHours = importedTotal,
+                fetchedHours = fetchedRows,
                 savedReadings = db.getSavedCount(locationKey),
                 initialHistoryComplete = prefs.getBoolean(completeKey, false),
                 initialImportCompletedNow = initialNeeded,
-                importedFromDate = start.toString(),
-                importedToDate = archiveEndDate.toString(),
+                importedFromDate = importedFromDate,
+                importedToDate = importedToDate,
                 locationProfile = profile,
                 localArchivePath = archiveFile.absolutePath,
                 localArchiveBytes = archiveFile.length()

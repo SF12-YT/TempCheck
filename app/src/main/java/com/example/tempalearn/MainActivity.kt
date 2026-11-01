@@ -83,13 +83,6 @@ class MainActivity : Activity() {
             prefs.edit().putString(AppPreferences.KEY_LOCATION, AppPreferences.DEFAULT_LOCATION).apply()
         }
         NotificationHelper.createChannel(this)
-        val initialSetupNeeded = !prefs.getBoolean(AppPreferences.KEY_INITIAL_SETUP_COMPLETE, false)
-        val oneFileArchiveSetupNeeded = !prefs.getBoolean(AppPreferences.KEY_ONE_FILE_ARCHIVE_SETUP_COMPLETE, false)
-        if (initialSetupNeeded || oneFileArchiveSetupNeeded) {
-            startActivity(Intent(this, FirstLaunchSetupActivity::class.java))
-            finish()
-            return
-        }
         buildInterface()
         uiBuilt = true
         scheduleDailySync()
@@ -239,7 +232,7 @@ class MainActivity : Activity() {
         historyRows = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         historyCard.addView(historyRows, LinearLayout.LayoutParams(-1, -2))
 
-        val attribution = "Historical hourly temperature targets and predictors: Open-Meteo Historical Weather API, Best Match reanalysis. Missing values remain missing; no other provider fills them. The initial history is imported from 1 January 2000 once per location, then only the latest local date is refreshed. Weather data by Open-Meteo.com (CC BY 4.0). Reanalysis is modelled historical weather, not a local station observation. Validation uses later unseen hours and is not a guarantee of forecast accuracy."
+        val attribution = "Historical hourly temperature targets and predictors: Open-Meteo Historical Weather API, Best Match reanalysis. The default location's complete published JSON archive is downloaded once, retained unchanged on this phone and pre-trained automatically on first launch. Other locations use a matching Open-Meteo archive download; later syncs update the latest available date. Missing values remain missing. Weather data by Open-Meteo.com (CC BY 4.0). Reanalysis is modelled historical weather, not a local station observation. Validation uses later unseen hours and is not a guarantee of forecast accuracy."
         addText(content, attribution, 11f, mutedColor, false).apply {
             val attributedText = android.text.SpannableString(attribution)
             val providerStart = attribution.indexOf("Open-Meteo.com")
@@ -514,7 +507,7 @@ class MainActivity : Activity() {
             } else {
                 predictionText.text = "— °C"
                 predictionSubtext.text = if (all.size < 4) {
-                    "Fetch hourly weather to begin learning for this postcode."
+                    "The historical archive will be imported and pre-trained automatically on first launch."
                 } else {
                     "Three consecutive hours are needed to estimate the next point."
                 }
@@ -610,7 +603,13 @@ class MainActivity : Activity() {
         syncInProgress = true
         syncButton.isEnabled = false
         syncButton.alpha = 0.7f
-        statusText.text = "Fetching Open-Meteo Best Match hourly history…"
+        val locationKey = AppPreferences.activeLocationKey(prefs, location)
+        val initialImportNeeded = !prefs.getBoolean(AppPreferences.historyCompleteKey(locationKey), false)
+        statusText.text = if (initialImportNeeded) {
+            "Downloading the complete Open-Meteo historical archive to this phone, then pre-training…"
+        } else {
+            "Refreshing Open-Meteo Best Match hourly history and updating the local model…"
+        }
         executor.execute {
             try {
                 val result = SyncRepository.sync(this, location)
@@ -619,7 +618,7 @@ class MainActivity : Activity() {
                     syncButton.isEnabled = true
                     syncButton.alpha = 1f
                     val importText = if (result.initialImportCompletedNow) {
-                        "Initial 2000-present Open-Meteo hourly archive imported"
+                        "Initial 2000-present Open-Meteo historical archive imported"
                     } else {
                         "Latest-date Open-Meteo hourly refresh completed"
                     }
@@ -815,6 +814,7 @@ class MainActivity : Activity() {
         val location = prefs.getString(AppPreferences.KEY_LOCATION, AppPreferences.DEFAULT_LOCATION)
             ?.takeIf { it.isNotBlank() } ?: return true
         val key = AppPreferences.activeLocationKey(prefs, location)
+        if (!prefs.getBoolean(AppPreferences.historyCompleteKey(key), false)) return true
         val lastSync = prefs.getLong(AppPreferences.syncTimeKey(key), 0L)
         if (lastSync == 0L || Instant.now().epochSecond - lastSync > 6L * 60L * 60L) return true
         val db = TemperatureDatabase(this)

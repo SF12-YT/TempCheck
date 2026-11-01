@@ -1,5 +1,7 @@
 package com.example.tempalearn
 
+import android.util.JsonReader
+import android.util.JsonToken
 import java.io.BufferedInputStream
 import java.io.BufferedOutputStream
 import java.io.BufferedReader
@@ -12,6 +14,7 @@ import java.io.InputStream
 import java.io.InputStreamReader
 import java.net.HttpURLConnection
 import java.net.URL
+import java.security.MessageDigest
 import java.net.URLEncoder
 import java.time.LocalDate
 import java.time.ZoneId
@@ -19,8 +22,22 @@ import java.time.ZonedDateTime
 import java.time.format.DateTimeFormatter
 import java.util.zip.GZIPInputStream
 
-/** Progress for the single full-file transfer or the later local CSV import. */
+/** Progress for the single full-file transfer or the later local archive import. */
 data class ArchiveFileProgress(val bytesTransferred: Long, val totalBytes: Long)
+
+data class HistoricalArchiveMetadata(
+    val latitude: Double?,
+    val longitude: Double?,
+    val elevationM: Double?,
+    val timezoneId: String?
+)
+
+data class JsonArchiveImportResult(
+    val importedRows: Int,
+    val firstTimestampSec: Long,
+    val lastTimestampSec: Long,
+    val metadata: HistoricalArchiveMetadata
+)
 
 /** Open-Meteo Best Match hourly archive client. CSV is parsed as a stream, not a giant JSON array. */
 object OpenMeteoClient {
@@ -84,7 +101,7 @@ object OpenMeteoClient {
                 setRequestProperty("Accept", "text/csv")
                 // Keep the saved file directly usable as a CSV and make byte progress meaningful.
                 setRequestProperty("Accept-Encoding", "identity")
-                setRequestProperty("User-Agent", "TempLearn-Android/0.9.3")
+                setRequestProperty("User-Agent", "TempLearn-Android/0.9.4")
             }
             try {
                 val code = connection.responseCode
@@ -333,6 +350,260 @@ object OpenMeteoClient {
         return value.toDoubleOrNull()?.takeIf{it.isFinite()}
     }
 
+    /**
+     * Downloads the immutable, complete Open-Meteo JSON archive published for TempLearn's
+     * default 2780 location. The unmodified JSON is retained locally. Its SHA-256 is checked
+     * before the .part file is atomically promoted, so incomplete or replaced assets are rejected.
+     */
+    @Throws(IOException::class)
+    fun downloadHistoricalJsonToFile(
+        destination: File,
+        onProgress: (ArchiveFileProgress) -> Unit = {}
+    ): File {
+        val parent = destination.parentFile ?: throw IOException("The local dataset folder is unavailable.")
+        if (!parent.exists() && !parent.mkdirs()) throw IOException("Could not create the local dataset folder.")
+        val partial = File(parent, destination.name + ".part")
+        var lastError: IOException? = null
+        for (attempt in 0..MAX_RETRIES) {
+            partial.delete()
+            val connection = (URL(HISTORICAL_JSON_URL).openConnection() as HttpURLConnection).apply {
+                requestMethod = "GET"
+                connectTimeout = 30_000
+                readTimeout = 180_000
+                instanceFollowRedirects = true
+                setRequestProperty("Accept", "application/json")
+                setRequestProperty("Accept-Encoding", "identity")
+                setRequestProperty("User-Agent", "TempLearn-Android/0.9.4")
+            }
+            try {
+                val code = connection.responseCode
+                if (code !in 200..299) {
+                    val detail = connection.errorStream?.bufferedReader(Charsets.UTF_8)?.use { it.readText() }.orEmpty()
+                    val error = IOException("Historical JSON download returned HTTP $code: ${detail.take(250)}")
+                    if ((code != 429 && code !in 500..599) || attempt == MAX_RETRIES) throw error
+                    lastError = error
+                    val delay = retryDelayMillis(connection.getHeaderField("Retry-After"), attempt)
+                    connection.disconnect()
+                    sleepBeforeRetry(delay)
+                    continue
+                }
+
+                val totalBytes = connection.getHeaderFieldLong("Content-Length", -1L)
+                val digest = MessageDigest.getInstance("SHA-256")
+                val input = BufferedInputStream(connection.inputStream, 64 * 1024)
+                val outputFile = FileOutputStream(partial, false)
+                val output = BufferedOutputStream(outputFile, 64 * 1024)
+                var transferred = 0L
+                var lastReported = 0L
+                try {
+                    val buffer = ByteArray(64 * 1024)
+                    while (true) {
+                        val count = input.read(buffer)
+                        if (count < 0) break
+                        if (count == 0) continue
+                        output.write(buffer, 0, count)
+                        digest.update(buffer, 0, count)
+                        transferred += count
+                        if (transferred - lastReported >= PROGRESS_INTERVAL_BYTES) {
+                            onProgress(ArchiveFileProgress(transferred, totalBytes))
+                            lastReported = transferred
+                        }
+                    }
+                    output.flush()
+                    outputFile.fd.sync()
+                    onProgress(ArchiveFileProgress(transferred, totalBytes))
+                } finally {
+                    output.close()
+                    input.close()
+                }
+
+                val actualHash = digest.digest().joinToString("") { "%02x".format(it) }
+                if (actualHash != HISTORICAL_JSON_SHA256) {
+                    throw IOException("The downloaded historical JSON failed its SHA-256 integrity check.")
+                }
+                if (partial.length() != HISTORICAL_JSON_SIZE_BYTES) {
+                    throw IOException("The downloaded historical JSON has an unexpected file size.")
+                }
+                java.nio.file.Files.move(
+                    partial.toPath(),
+                    destination.toPath(),
+                    java.nio.file.StandardCopyOption.REPLACE_EXISTING,
+                    java.nio.file.StandardCopyOption.ATOMIC_MOVE
+                )
+                return destination
+            } catch (error: IOException) {
+                partial.delete()
+                if (attempt == MAX_RETRIES ||
+                    (error.message?.contains("HTTP 4") == true && error.message?.contains("HTTP 429") != true)
+                ) throw error
+                lastError = error
+                sleepBeforeRetry((BASE_RETRY_DELAY_MS * (1L shl attempt)).coerceAtMost(MAX_RETRY_DELAY_MS))
+            } finally {
+                connection.disconnect()
+            }
+        }
+        throw lastError ?: IOException("The historical JSON download failed after retries.")
+    }
+
+    /**
+     * Streams the saved JSON's column arrays into primitive arrays, then writes database rows
+     * in small batches. The original JSON file is never rewritten or reduced; unrecognised hourly
+     * variables remain available in that retained raw archive for future features.
+     */
+    @Throws(IOException::class)
+    fun importHourlyArchiveJsonFile(
+        file: File,
+        onBatch: (List<HourlyTemperature>) -> Unit,
+        onProgress: (ArchiveFileProgress) -> Unit = {}
+    ): JsonArchiveImportResult {
+        if (!file.isFile || file.length() <= 0L) throw IOException("The saved historical JSON file is missing or empty.")
+        var times: LongArray? = null
+        val columns = linkedMapOf<String, DoubleArray>()
+        var latitude: Double? = null
+        var longitude: Double? = null
+        var elevation: Double? = null
+        var timezone: String? = null
+
+        JsonReader(InputStreamReader(BufferedInputStream(FileInputStream(file), 64 * 1024), Charsets.UTF_8)).use { reader ->
+            reader.isLenient = false
+            reader.beginObject()
+            while (reader.hasNext()) {
+                when (reader.nextName()) {
+                    "latitude" -> latitude = reader.readNullableDouble()
+                    "longitude" -> longitude = reader.readNullableDouble()
+                    "elevation" -> elevation = reader.readNullableDouble()
+                    "timezone" -> timezone = if (reader.peek() == JsonToken.NULL) { reader.nextNull(); null } else reader.nextString()
+                    "hourly" -> {
+                        reader.beginObject()
+                        while (reader.hasNext()) {
+                            val field = reader.nextName()
+                            when {
+                                field == "time" -> times = reader.readUnixTimeArray()
+                                field in hourlyFields -> columns[field] = reader.readNullableDoubleArray()
+                                else -> reader.skipValue()
+                            }
+                        }
+                        reader.endObject()
+                    }
+                    else -> reader.skipValue()
+                }
+            }
+            reader.endObject()
+        }
+
+        val timestamps = times ?: throw IOException("The JSON archive has no hourly.time array.")
+        val temperatures = columns["temperature_2m"]
+            ?: throw IOException("The JSON archive has no hourly.temperature_2m target.")
+        if (timestamps.isEmpty() || temperatures.size != timestamps.size) {
+            throw IOException("The JSON archive's hourly timestamps and temperature values do not match.")
+        }
+        columns.forEach { (name, values) ->
+            if (values.size != timestamps.size) {
+                throw IOException("The JSON archive's $name column has a different number of hourly rows.")
+            }
+        }
+
+        fun value(name: String, index: Int): Double? =
+            columns[name]?.get(index)?.takeIf { it.isFinite() }
+
+        val totalBytes = file.length()
+        val batch = ArrayList<HourlyTemperature>(256)
+        var imported = 0
+        for (index in timestamps.indices) {
+            val temperature = temperatures[index]
+            if (temperature.isFinite()) {
+                batch += HourlyTemperature(
+                    timestampSec = timestamps[index],
+                    temperatureC = temperature,
+                    humidityPct = value("relative_humidity_2m", index),
+                    dewPointC = value("dew_point_2m", index),
+                    precipitationMm = value("precipitation", index),
+                    rainMm = value("rain", index),
+                    snowfallCm = value("snowfall", index),
+                    weatherCode = value("weather_code", index)?.toInt(),
+                    cloudCoverPct = value("cloud_cover", index),
+                    cloudLowPct = value("cloud_cover_low", index),
+                    cloudMidPct = value("cloud_cover_mid", index),
+                    cloudHighPct = value("cloud_cover_high", index),
+                    pressureHpa = value("pressure_msl", index),
+                    windSpeedKmh = value("wind_speed_10m", index),
+                    windGustKmh = value("wind_gusts_10m", index),
+                    solarRadiationWm2 = value("shortwave_radiation", index),
+                    temperatureSource = SOURCE
+                )
+                imported++
+            }
+            if (batch.size >= 256) {
+                onBatch(batch.toList())
+                batch.clear()
+            }
+            if (index % 1024 == 0) {
+                onProgress(ArchiveFileProgress((index.toLong() * totalBytes / timestamps.size).coerceAtMost(totalBytes), totalBytes))
+            }
+        }
+        if (batch.isNotEmpty()) onBatch(batch.toList())
+        onProgress(ArchiveFileProgress(totalBytes, totalBytes))
+        if (imported == 0) throw IOException("The JSON archive contains no valid 2 m temperature targets.")
+        return JsonArchiveImportResult(
+            importedRows = imported,
+            firstTimestampSec = timestamps.first(),
+            lastTimestampSec = timestamps.last(),
+            metadata = HistoricalArchiveMetadata(latitude, longitude, elevation, timezone)
+        )
+    }
+
+    private fun JsonReader.readNullableDouble(): Double? {
+        if (peek() == JsonToken.NULL) {
+            nextNull()
+            return null
+        }
+        return nextDouble().takeIf { it.isFinite() }
+    }
+
+    private fun JsonReader.readNullableDoubleArray(): DoubleArray {
+        val values = DoubleArrayBuilder()
+        beginArray()
+        while (hasNext()) values.add(readNullableDouble() ?: Double.NaN)
+        endArray()
+        return values.toArray()
+    }
+
+    private fun JsonReader.readUnixTimeArray(): LongArray {
+        val values = LongArrayBuilder()
+        beginArray()
+        while (hasNext()) {
+            if (peek() == JsonToken.NULL) {
+                nextNull()
+                throw IOException("The JSON archive contains a null hourly timestamp.")
+            }
+            val value = if (peek() == JsonToken.STRING) nextString().toLongOrNull()
+                else runCatching { nextLong() }.getOrNull()
+            values.add(value ?: throw IOException("The JSON archive contains an invalid Unix timestamp."))
+        }
+        endArray()
+        return values.toArray()
+    }
+
+    private class DoubleArrayBuilder {
+        private var values = DoubleArray(16_384)
+        private var size = 0
+        fun add(value: Double) {
+            if (size == values.size) values = values.copyOf(values.size * 2)
+            values[size++] = value
+        }
+        fun toArray(): DoubleArray = values.copyOf(size)
+    }
+
+    private class LongArrayBuilder {
+        private var values = LongArray(16_384)
+        private var size = 0
+        fun add(value: Long) {
+            if (size == values.size) values = values.copyOf(values.size * 2)
+            values[size++] = value
+        }
+        fun toArray(): LongArray = values.copyOf(size)
+    }
+
     @Throws(IOException::class)
     fun fetchElevation(latitude:Double,longitude:Double):Double?{
         require(latitude.isFinite() && latitude in -90.0..90.0)
@@ -341,7 +612,7 @@ object OpenMeteoClient {
         val connection=(url.openConnection() as HttpURLConnection).apply{
             requestMethod="GET";connectTimeout=12_000;readTimeout=18_000
             setRequestProperty("Accept","application/json")
-            setRequestProperty("User-Agent","TempLearn-Android/0.9.3")
+            setRequestProperty("User-Agent","TempLearn-Android/0.9.4")
         }
         try{
             val code=connection.responseCode
@@ -353,6 +624,9 @@ object OpenMeteoClient {
             return values.optDouble(0,Double.NaN).takeIf{it.isFinite()}
         }finally{connection.disconnect()}
     }
+    const val HISTORICAL_JSON_URL = "https://github.com/SF12-YT/dummy-assets/releases/download/openmeteo/archive.json"
+    const val HISTORICAL_JSON_SHA256 = "88720e72c510d81f8db148c48a925c3d02e8bb8301e957471c9f446f2c465f6a"
+    const val HISTORICAL_JSON_SIZE_BYTES = 30_895_447L
     private const val MAX_RETRIES = 4
     private const val PROGRESS_INTERVAL_BYTES = 256L * 1024L
     private const val BASE_RETRY_DELAY_MS = 5_000L
