@@ -482,6 +482,17 @@ object SyncRepository {
             )
         }
 
+        // Snapshot a prospective one-hour estimate BEFORE requesting newer hourly rows.
+        // The fetched rows may contain the target hour; saving only after the refresh would
+        // miss the forecast/observation pair that this feedback learner is meant to evaluate.
+        runCatching {
+            storeProspectivePredictionBeforeRefresh(
+                context = context,
+                locationKey = downloaded.locationKey,
+                locationProfile = downloaded.locationProfile
+            )
+        }
+
         var recentRows = 0
         var recentUpdateWarning: String? = null
         try {
@@ -554,6 +565,35 @@ object SyncRepository {
             locationProfile = downloaded.locationProfile,
             recentUpdateWarning = recentUpdateWarning
         )
+    }
+
+    /**
+     * Preserve the forecast from the currently stored weather state before the rolling refresh
+     * imports newer hours. This lets that refresh verify a prediction made from the prior state.
+     */
+    private fun storeProspectivePredictionBeforeRefresh(
+        context: Context,
+        locationKey: String,
+        locationProfile: LocationProfile
+    ) {
+        val database = TemperatureDatabase(context.applicationContext)
+        try {
+            val readings = database.getLatestReadings(locationKey, 72)
+            val model = database.getModel(locationKey)
+                ?: database.getModel(AppPreferences.SHARED_MODEL_KEY)
+                ?: return
+
+            predictAndStoreNextHour(
+                database = database,
+                locationKey = locationKey,
+                readings = readings,
+                model = model,
+                timezoneId = locationProfile.timezoneId,
+                locationContext = locationProfile.modelContext()
+            )
+        } finally {
+            database.close()
+        }
     }
 
     private fun TemperatureDatabase.useCountLocationsSafely(): Int = try {
