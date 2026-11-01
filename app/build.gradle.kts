@@ -67,4 +67,5 @@ kotlin {
 
 dependencies {
     implementation("androidx.work:work-runtime:2.9.1")
+    testImplementation("junit:junit:4.13.2")
 }
