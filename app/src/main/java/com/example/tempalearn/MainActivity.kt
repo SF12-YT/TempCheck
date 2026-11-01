@@ -74,8 +74,48 @@ class MainActivity : Activity() {
         window.navigationBarColor = backgroundColor
         window.decorView.systemUiVisibility = View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR
 
-        if (!prefs.contains(AppPreferences.KEY_LOCATION)) {
-            prefs.edit().putString(AppPreferences.KEY_LOCATION, AppPreferences.DEFAULT_LOCATION).apply()
+        val previouslySavedLocation = prefs.getString(AppPreferences.KEY_LOCATION, null)
+        val preferenceMigration = prefs.edit()
+        if (previouslySavedLocation == null) {
+            preferenceMigration.putString(AppPreferences.KEY_LOCATION, AppPreferences.DEFAULT_LOCATION)
+        } else if (previouslySavedLocation.equals("2780, NSW, Australia", ignoreCase = true)) {
+            // Preserve the active dataset key while renaming the default place from postcode to Katoomba.
+            preferenceMigration.putString(AppPreferences.KEY_LOCATION, AppPreferences.DEFAULT_LOCATION)
+        }
+        preferenceMigration.apply()
+        val startupLocation = prefs.getString(AppPreferences.KEY_LOCATION, AppPreferences.DEFAULT_LOCATION)
+            ?: AppPreferences.DEFAULT_LOCATION
+        val startupLocationKey = AppPreferences.activeLocationKey(prefs, startupLocation)
+        if (startupLocation.equals(AppPreferences.DEFAULT_LOCATION, ignoreCase = true) &&
+            !prefs.contains(AppPreferences.weatherPointModeKey(startupLocationKey))
+        ) {
+            prefs.edit()
+                .putString(AppPreferences.weatherPointModeKey(startupLocationKey), AppPreferences.WEATHER_POINT_MANUAL)
+                .putString(AppPreferences.weatherPointNameKey(startupLocationKey), AppPreferences.DEFAULT_WEATHER_POINT_NAME)
+                .apply()
+        }
+        val migrationDb = TemperatureDatabase(this)
+        try {
+            val savedProfile = migrationDb.getLocationProfile(startupLocationKey)
+            if (startupLocation.equals(AppPreferences.DEFAULT_LOCATION, ignoreCase = true) &&
+                savedProfile?.name.equals("2780", ignoreCase = true)
+            ) {
+                savedProfile?.let {
+                    migrationDb.saveLocationProfile(
+                        it.copy(
+                            searchQuery = AppPreferences.DEFAULT_LOCATION,
+                            name = "Katoomba",
+                            admin1 = "New South Wales",
+                            admin2 = null,
+                            country = "Australia",
+                            countryCode = "AU",
+                            postcodes = listOf("2780")
+                        )
+                    )
+                }
+            }
+        } finally {
+            migrationDb.close()
         }
         NotificationHelper.createChannel(this)
         buildInterface()
@@ -279,7 +319,7 @@ class MainActivity : Activity() {
         }
         addText(
             content,
-            "Search for a postcode, town or address, then choose the matching place. TempLearn saves its coordinates, elevation and timezone and keeps each location's Open-Meteo history and local model separate.",
+            "Search for a town or postcode, then choose how Open-Meteo should place the weather data point: Automatic uses that place; Manual lets you choose a separate nearby location such as Mount Boyce. Both modes use Open-Meteo Best Match data.",
             14f,
             mutedColor,
             false
@@ -296,7 +336,7 @@ class MainActivity : Activity() {
         locationCard.addView(locationInput, LinearLayout.LayoutParams(-1, dp(50)).apply { topMargin = dp(9) })
         addText(
             locationCard,
-            "Examples: 2780, NSW, Australia · Katoomba, NSW, Australia · Perth, WA, Australia. Geocoding supplies the canonical coordinates, elevation and timezone. Open-Meteo Best Match supplies all 27 hourly training variables.",
+            "Examples: Katoomba, NSW, Australia · Blackheath, NSW, Australia · Perth, WA, Australia. After choosing the place, select Automatic or search for a separate Manual weather location (for example, Mount Boyce). The provider remains Open-Meteo.",
             12f,
             mutedColor,
             false
@@ -445,7 +485,18 @@ class MainActivity : Activity() {
         val db = TemperatureDatabase(this)
         try {
             val profile = db.getLocationProfile(locationKey)
-            locationSummaryText.text = profile?.displayName ?: location
+            val selectedMode = prefs.getString(
+                AppPreferences.weatherPointModeKey(locationKey),
+                if (location.equals(AppPreferences.DEFAULT_LOCATION, ignoreCase = true)) AppPreferences.WEATHER_POINT_MANUAL
+                else AppPreferences.WEATHER_POINT_AUTOMATIC
+            ) ?: AppPreferences.WEATHER_POINT_AUTOMATIC
+            val selectedPoint = prefs.getString(
+                AppPreferences.weatherPointNameKey(locationKey),
+                if (location.equals(AppPreferences.DEFAULT_LOCATION, ignoreCase = true)) AppPreferences.DEFAULT_WEATHER_POINT_NAME
+                else profile?.displayName
+            ) ?: profile?.displayName ?: location
+            val modeLabel = if (selectedMode == AppPreferences.WEATHER_POINT_MANUAL) "Manual" else "Automatic"
+            locationSummaryText.text = "${profile?.displayName ?: location}\nWeather data: $selectedPoint · $modeLabel"
             val zoneId = profile?.timezoneId ?: (prefs.getString(
                 AppPreferences.timezoneKey(locationKey),
                 ZoneId.systemDefault().id
@@ -663,9 +714,9 @@ class MainActivity : Activity() {
                     }
                     val labels = matches.map { it.selectionLabel() }.toTypedArray()
                     AlertDialog.Builder(this)
-                        .setTitle("Choose the correct location")
+                        .setTitle("Choose the correct place")
                         .setItems(labels) { _, index ->
-                            saveSelectedLocation(query, matches[index], allowLegacyMigration = matches.size == 1)
+                            chooseWeatherPoint(query, matches[index])
                         }
                         .setNegativeButton("Cancel") { _, _ -> statusText.text = "Location not changed." }
                         .show()
@@ -679,25 +730,127 @@ class MainActivity : Activity() {
         }
     }
 
+    /** Choose the data coordinates independently of the named town/postcode. */
+    private fun chooseWeatherPoint(query: String, place: LocationGeocodingClient.Place) {
+        AlertDialog.Builder(this)
+            .setTitle("Choose Open-Meteo data location")
+            .setMessage(
+                "Automatic uses this place's coordinates and lets Open-Meteo Best Match select the model. Manual lets you choose a separate nearby weather location, such as Mount Boyce. Both modes use Open-Meteo."
+            )
+            .setPositiveButton("Automatic") { _, _ ->
+                saveSelectedLocation(query, place, place, AppPreferences.WEATHER_POINT_AUTOMATIC)
+            }
+            .setNeutralButton("Manual…") { _, _ ->
+                promptManualWeatherLocation(query, place)
+            }
+            .setNegativeButton("Cancel") { _, _ -> statusText.text = "Location not changed." }
+            .show()
+    }
+
+    private fun promptManualWeatherLocation(
+        query: String,
+        place: LocationGeocodingClient.Place
+    ) {
+        val defaultStationQuery = if (query.equals(AppPreferences.DEFAULT_LOCATION, ignoreCase = true)) {
+            "Mount Boyce, NSW, Australia"
+        } else {
+            ""
+        }
+        val stationInput = EditText(this).apply {
+            hint = "Weather location, e.g. Mount Boyce, NSW"
+            setText(defaultStationQuery)
+            setSingleLine(true)
+            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_CAP_SENTENCES
+            setPadding(dp(12), dp(9), dp(12), dp(9))
+        }
+        AlertDialog.Builder(this)
+            .setTitle("Choose manual weather location")
+            .setMessage("Search Open-Meteo locations for the point you want the weather data to represent.")
+            .setView(stationInput)
+            .setPositiveButton("Search") { _, _ ->
+                val stationQuery = stationInput.text.toString().trim()
+                if (stationQuery.length < 2) {
+                    Toast.makeText(this, "Enter a weather location.", Toast.LENGTH_SHORT).show()
+                } else {
+                    searchAndSelectManualWeatherLocation(query, place, stationQuery)
+                }
+            }
+            .setNegativeButton("Back") { _, _ -> chooseWeatherPoint(query, place) }
+            .show()
+    }
+
+    private fun searchAndSelectManualWeatherLocation(
+        query: String,
+        place: LocationGeocodingClient.Place,
+        weatherQuery: String
+    ) {
+        statusText.text = "Searching for manual weather locations…"
+        executor.execute {
+            try {
+                val matches = LocationGeocodingClient.search(weatherQuery)
+                runOnUiThread {
+                    if (matches.isEmpty()) {
+                        statusText.text = "No matching manual weather location found."
+                        AlertDialog.Builder(this)
+                            .setTitle("No weather location found")
+                            .setMessage("Open-Meteo could not find that place. Try a nearby town, named locality, or postcode.")
+                            .setPositiveButton("Try again") { _, _ ->
+                                promptManualWeatherLocation(query, place)
+                            }
+                            .setNegativeButton("Cancel", null)
+                            .show()
+                        return@runOnUiThread
+                    }
+                    val labels = matches.map { it.selectionLabel() }.toTypedArray()
+                    AlertDialog.Builder(this)
+                        .setTitle("Choose the manual weather location")
+                        .setItems(labels) { _, index ->
+                            saveSelectedLocation(query, place, matches[index], AppPreferences.WEATHER_POINT_MANUAL)
+                        }
+                        .setNegativeButton("Cancel") { _, _ -> statusText.text = "Location not changed." }
+                        .show()
+                }
+            } catch (error: Exception) {
+                runOnUiThread {
+                    statusText.text = "Manual location search failed: ${error.message ?: "check your connection"}"
+                    Toast.makeText(this, statusText.text, Toast.LENGTH_LONG).show()
+                }
+            }
+        }
+    }
+
     private fun saveSelectedLocation(
         query: String,
         place: LocationGeocodingClient.Place,
-        allowLegacyMigration: Boolean
+        weatherPlace: LocationGeocodingClient.Place,
+        weatherPointMode: String
     ) {
         statusText.text = "Saving ${place.displayName}…"
         executor.execute {
             try {
-                val elevation = place.elevationM ?: runCatching {
-                    OpenMeteoClient.fetchElevation(place.latitude, place.longitude)
+                val elevation = weatherPlace.elevationM ?: runCatching {
+                    OpenMeteoClient.fetchElevation(weatherPlace.latitude, weatherPlace.longitude)
                 }.getOrNull()
-                val legacyKey = AppPreferences.locationKey(query)
-                val locationKey = AppPreferences.geocodedLocationKey(place.id)
-                val profile = place.toProfile(locationKey, query, elevation)
+                val locationKey: String
+                val profile: LocationProfile
                 val database = TemperatureDatabase(this)
                 try {
-                    if (allowLegacyMigration) {
-                        database.moveLocationKey(legacyKey, locationKey, place.id)
+                    val reusableProfile = database.getAllLocationProfiles().values.firstOrNull { candidate ->
+                        val samePoint =
+                            kotlin.math.abs(candidate.latitude - weatherPlace.latitude) <= 0.001 &&
+                            kotlin.math.abs(candidate.longitude - weatherPlace.longitude) <= 0.001
+                        val samePlace = candidate.geocodingId == place.id ||
+                            (query.equals(AppPreferences.DEFAULT_LOCATION, ignoreCase = true) && candidate.geocodingId == 0L)
+                        samePoint && samePlace
                     }
+                    locationKey = reusableProfile?.locationKey
+                        ?: AppPreferences.weatherDataLocationKey(place.id, weatherPlace.latitude, weatherPlace.longitude)
+                    profile = place.toProfile(locationKey, query, elevation).copy(
+                        latitude = weatherPlace.latitude,
+                        longitude = weatherPlace.longitude,
+                        elevationM = elevation,
+                        timezoneId = weatherPlace.timezoneId
+                    )
                     database.saveLocationProfile(profile)
                 } finally {
                     database.close()
@@ -706,10 +859,15 @@ class MainActivity : Activity() {
                     .putString(AppPreferences.KEY_LOCATION, query)
                     .putString(AppPreferences.KEY_ACTIVE_LOCATION_KEY, locationKey)
                     .putString(AppPreferences.timezoneKey(locationKey), profile.timezoneId)
+                    .putString(AppPreferences.resolvedAddressKey(locationKey), profile.displayName)
+                    .putString(AppPreferences.latitudeKey(locationKey), profile.latitude.toString())
+                    .putString(AppPreferences.longitudeKey(locationKey), profile.longitude.toString())
+                    .putString(AppPreferences.elevationKey(locationKey), profile.elevationM?.toString())
+                    .putString(AppPreferences.weatherPointModeKey(locationKey), weatherPointMode)
+                    .putString(AppPreferences.weatherPointNameKey(locationKey), weatherPlace.displayName)
                     .apply()
                 DailySyncScheduler.rescheduleForLocation(applicationContext)
                 runOnUiThread {
-                    locationSummaryText.text = profile.displayName
                     showSettings(false)
                     refreshDashboard()
                     syncNow(manual = true)

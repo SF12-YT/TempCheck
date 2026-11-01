@@ -43,6 +43,30 @@ class SourcePolicyTests(unittest.TestCase):
         self.assertIn("DEFAULT_LATITUDE = -33.6153", client)
         self.assertIn("DEFAULT_LONGITUDE = 150.2665", client)
 
+    def test_default_place_is_katoomba_with_manual_mount_boyce_data_point(self):
+        preferences = (KOTLIN / "SyncRepository.kt").read_text(encoding="utf-8")
+        client = (KOTLIN / "OpenMeteoClient.kt").read_text(encoding="utf-8")
+        main = (KOTLIN / "MainActivity.kt").read_text(encoding="utf-8")
+        self.assertIn('DEFAULT_LOCATION = "Katoomba, NSW, Australia"', preferences)
+        self.assertIn('DEFAULT_WEATHER_POINT_NAME = "Mount Boyce"', preferences)
+        self.assertIn('name = "Katoomba"', preferences)
+        self.assertIn("DEFAULT_LATITUDE = -33.6153", client)
+        self.assertIn("DEFAULT_LONGITUDE = 150.2665", client)
+        self.assertIn("Choose Open-Meteo data location", main)
+        self.assertIn('setPositiveButton("Automatic")', main)
+        self.assertIn('setNeutralButton("Manual…")', main)
+        self.assertIn("promptManualWeatherLocation", main)
+        self.assertIn("weatherDataLocationKey(place.id, weatherPlace.latitude, weatherPlace.longitude)", main)
+        self.assertIn("weatherPointModeKey", preferences)
+        self.assertIn("weatherPointNameKey", preferences)
+
+    def test_default_json_archive_is_used_only_for_mount_boyce_point(self):
+        sync = (KOTLIN / "SyncRepository.kt").read_text(encoding="utf-8")
+        self.assertIn("isDefaultLocation &&", sync)
+        self.assertIn("abs(profile.latitude - OpenMeteoClient.DEFAULT_LATITUDE) <= 0.001", sync)
+        self.assertIn("abs(profile.longitude - OpenMeteoClient.DEFAULT_LONGITUDE) <= 0.001", sync)
+        self.assertIn("weatherPointModeKey(locationKey)", sync)
+
     def test_archive_streams_csv_and_json_and_preserves_missing_fields(self):
         client = (KOTLIN / "OpenMeteoClient.kt").read_text(encoding="utf-8")
         self.assertIn("BufferedReader", client)

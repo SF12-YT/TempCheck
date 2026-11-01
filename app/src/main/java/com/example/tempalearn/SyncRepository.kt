@@ -11,12 +11,22 @@ object AppPreferences {
     const val PREFS_NAME = "templearn_preferences"
     const val KEY_LOCATION = "location"
     const val KEY_ACTIVE_LOCATION_KEY = "active_location_key"
-    const val DEFAULT_LOCATION = "2780, NSW, Australia"
+    const val DEFAULT_LOCATION = "Katoomba, NSW, Australia"
     const val SHARED_MODEL_KEY = "__templearn_shared_weather_model__"
     const val KEY_NOTIFICATION_PERMISSION_REQUESTED = "notification_permission_requested"
+    const val WEATHER_POINT_AUTOMATIC = "automatic"
+    const val WEATHER_POINT_MANUAL = "manual"
+    const val DEFAULT_WEATHER_POINT_NAME = "Mount Boyce"
 
     fun locationKey(location: String) = location.trim().replace(Regex("\\s+"), " ").lowercase(Locale.US)
     fun geocodedLocationKey(geocodingId: Long) = "geo:$geocodingId"
+    fun weatherDataLocationKey(geocodingId: Long, latitude: Double, longitude: Double): String {
+        val latitudeE5 = kotlin.math.round(latitude * 100_000.0).toLong()
+        val longitudeE5 = kotlin.math.round(longitude * 100_000.0).toLong()
+        return "geo:$geocodingId:point:$latitudeE5:$longitudeE5"
+    }
+    fun weatherPointModeKey(locationKey: String) = "weather_point_mode_$locationKey"
+    fun weatherPointNameKey(locationKey: String) = "weather_point_name_$locationKey"
     fun activeLocationKey(preferences: android.content.SharedPreferences, location: String) =
         preferences.getString(KEY_ACTIVE_LOCATION_KEY, null)?.takeIf { it.isNotBlank() } ?: locationKey(location)
     fun syncTimeKey(locationKey: String) = "last_sync_$locationKey"
@@ -88,22 +98,21 @@ object SyncRepository {
         require(normalized.length >= 2) { "Enter a postcode, town, or address." }
         val prefs = app.getSharedPreferences(AppPreferences.PREFS_NAME, Context.MODE_PRIVATE)
         val legacyKey = AppPreferences.locationKey(normalized)
-        val usePublishedJson = normalized.equals(AppPreferences.DEFAULT_LOCATION, ignoreCase = true)
+        val isDefaultLocation = normalized.equals(AppPreferences.DEFAULT_LOCATION, ignoreCase = true)
         var locationKey = AppPreferences.activeLocationKey(prefs, normalized)
         val db = TemperatureDatabase(app)
         try {
             var profile = selectedProfile?.copy(searchQuery = normalized)
                 ?: db.getLocationProfile(locationKey)
                 ?: db.getLocationProfile(legacyKey)
-                ?: if (usePublishedJson) {
-                    // The published archive already contains the authoritative grid coordinates,
-                    // elevation and timezone. Seed a local profile so first launch never needs
-                    // Geocoding or Elevation API calls before downloading that archive.
+                ?: if (isDefaultLocation) {
+                    // The published archive is the default Mount Boyce weather-data point.
+                    // Katoomba remains the named place shown in the interface.
                     LocationProfile(
                         locationKey = legacyKey,
                         geocodingId = 0L,
                         searchQuery = normalized,
-                        name = "2780",
+                        name = "Katoomba",
                         admin1 = "New South Wales",
                         admin2 = null,
                         country = "Australia",
@@ -120,15 +129,35 @@ object SyncRepository {
                 } else {
                     LocationGeocodingClient.resolveUnambiguous(normalized, legacyKey)
                 }
-            val canonical = if (profile.geocodingId > 0L) {
-                AppPreferences.geocodedLocationKey(profile.geocodingId)
-            } else {
-                legacyKey
+
+            // Keep the requested town as the profile label, even when its weather-data
+            // coordinates are a separately selected nearby location.
+            if (isDefaultLocation && profile.name.equals("2780", ignoreCase = true)) {
+                profile = profile.copy(
+                    searchQuery = normalized,
+                    name = "Katoomba",
+                    admin1 = "New South Wales",
+                    admin2 = null,
+                    country = "Australia",
+                    countryCode = "AU",
+                    postcodes = listOf("2780")
+                )
             }
-            if (locationKey != canonical) {
-                db.moveLocationKey(legacyKey, canonical, profile.geocodingId)
-                locationKey = canonical
-                profile = profile.copy(locationKey = canonical)
+
+            // Profiles are stored under the location-plus-weather-point key. Preserve that key
+            // instead of collapsing Automatic and Manual selections into one town-only series.
+            if (locationKey != profile.locationKey) {
+                locationKey = profile.locationKey
+            }
+            val usePublishedJson = isDefaultLocation &&
+                kotlin.math.abs(profile.latitude - OpenMeteoClient.DEFAULT_LATITUDE) <= 0.001 &&
+                kotlin.math.abs(profile.longitude - OpenMeteoClient.DEFAULT_LONGITUDE) <= 0.001
+
+            if (isDefaultLocation && !prefs.contains(AppPreferences.weatherPointModeKey(locationKey))) {
+                prefs.edit()
+                    .putString(AppPreferences.weatherPointModeKey(locationKey), AppPreferences.WEATHER_POINT_MANUAL)
+                    .putString(AppPreferences.weatherPointNameKey(locationKey), AppPreferences.DEFAULT_WEATHER_POINT_NAME)
+                    .apply()
             }
             if (profile.elevationM == null && !usePublishedJson) {
                 val elevation = runCatching { OpenMeteoClient.fetchElevation(profile.latitude, profile.longitude) }.getOrNull()
