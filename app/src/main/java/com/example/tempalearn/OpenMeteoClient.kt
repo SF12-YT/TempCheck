@@ -79,9 +79,6 @@ object OpenMeteoClient {
         require(longitude.isFinite() && longitude in -180.0..180.0)
         require(!endDate.isBefore(startDate)) { "The archive end date precedes its start date." }
         ZoneId.of(timezoneId)
-        val parent = destination.parentFile ?: throw IOException("The local dataset folder is unavailable.")
-        if (!parent.exists() && !parent.mkdirs()) throw IOException("Could not create the local dataset folder.")
-        val partial = File(parent, destination.name + ".part")
         val timezone = URLEncoder.encode(timezoneId, Charsets.UTF_8.name())
         val elevation = elevationM?.takeIf { it.isFinite() }?.let { "&elevation=$it" }.orEmpty()
         val url = URL(
@@ -90,7 +87,44 @@ object OpenMeteoClient {
                 "&timezone=$timezone&timeformat=unixtime&temperature_unit=celsius&wind_speed_unit=kmh" +
                 "&precipitation_unit=mm&format=csv"
         )
+        return downloadCsvToFile(url, destination, "Open-Meteo Historical Weather API", onProgress)
+    }
 
+    /**
+     * Uses the user's rolling-refresh endpoint: previous local day, no future forecast hours.
+     * The extra CSV/time parameters keep timestamps compatible with TempLearn's Unix-time parser.
+     */
+    @Throws(IOException::class)
+    fun downloadRecentHourlyForecastToFile(
+        latitude: Double,
+        longitude: Double,
+        timezoneId: String,
+        destination: File,
+        onProgress: (ArchiveFileProgress) -> Unit = {}
+    ): File {
+        require(latitude.isFinite() && latitude in -90.0..90.0)
+        require(longitude.isFinite() && longitude in -180.0..180.0)
+        ZoneId.of(timezoneId)
+        val timezone = URLEncoder.encode(timezoneId, Charsets.UTF_8.name())
+        val url = URL(
+            "https://api.open-meteo.com/v1/forecast?latitude=$latitude&longitude=$longitude" +
+                "&hourly=${hourlyFields.joinToString(",")}&timezone=$timezone&past_days=1&forecast_days=0" +
+                "&timeformat=unixtime&temperature_unit=celsius&wind_speed_unit=kmh" +
+                "&precipitation_unit=mm&format=csv"
+        )
+        return downloadCsvToFile(url, destination, "Open-Meteo Forecast API", onProgress)
+    }
+
+    @Throws(IOException::class)
+    private fun downloadCsvToFile(
+        url: URL,
+        destination: File,
+        apiName: String,
+        onProgress: (ArchiveFileProgress) -> Unit
+    ): File {
+        val parent = destination.parentFile ?: throw IOException("The local dataset folder is unavailable.")
+        if (!parent.exists() && !parent.mkdirs()) throw IOException("Could not create the local dataset folder.")
+        val partial = File(parent, destination.name + ".part")
         var lastError: IOException? = null
         for (attempt in 0..MAX_RETRIES) {
             partial.delete()
@@ -99,16 +133,15 @@ object OpenMeteoClient {
                 connectTimeout = 30_000
                 readTimeout = 180_000
                 setRequestProperty("Accept", "text/csv")
-                // Keep the saved file directly usable as a CSV and make byte progress meaningful.
                 setRequestProperty("Accept-Encoding", "identity")
-                setRequestProperty("User-Agent", "TempLearn-Android/0.9.4")
+                setRequestProperty("User-Agent", "TempLearn-Android/0.9.6")
             }
             try {
                 val code = connection.responseCode
                 if (code !in 200..299) {
                     val retryAfter = connection.getHeaderField("Retry-After")
                     val detail = connection.errorStream?.bufferedReader(Charsets.UTF_8)?.use { it.readText() }.orEmpty()
-                    val error = IOException("Open-Meteo Historical Weather returned HTTP $code: ${detail.take(350)}")
+                    val error = IOException("$apiName returned HTTP $code: ${detail.take(350)}")
                     val retryable = code == 429 || code in 500..599
                     if (!retryable || attempt == MAX_RETRIES) throw error
                     lastError = error
@@ -145,7 +178,7 @@ object OpenMeteoClient {
                 }
 
                 if (!partial.exists() || partial.length() == 0L) {
-                    throw IOException("Open-Meteo returned an empty historical CSV file.")
+                    throw IOException("$apiName returned an empty hourly CSV file.")
                 }
                 validateCsvHeader(partial)
                 try {
@@ -157,10 +190,10 @@ object OpenMeteoClient {
                     )
                 } catch (_: Exception) {
                     if (destination.exists() && !destination.delete()) {
-                        throw IOException("Could not replace the previous local historical dataset.")
+                        throw IOException("Could not replace the previous local hourly dataset.")
                     }
                     if (!partial.renameTo(destination)) {
-                        throw IOException("Could not save the completed historical dataset on this device.")
+                        throw IOException("Could not save the completed hourly dataset on this device.")
                     }
                 }
                 return destination
@@ -175,7 +208,7 @@ object OpenMeteoClient {
                 connection.disconnect()
             }
         }
-        throw lastError ?: IOException("Open-Meteo archive download failed after retries.")
+        throw lastError ?: IOException("$apiName download failed after retries.")
     }
 
     /** Imports the already-downloaded local CSV; this function performs no network requests. */
@@ -631,5 +664,8 @@ object OpenMeteoClient {
     private const val PROGRESS_INTERVAL_BYTES = 256L * 1024L
     private const val BASE_RETRY_DELAY_MS = 5_000L
     private const val MAX_RETRY_DELAY_MS = 300_000L
+    const val DEFAULT_LATITUDE = -33.6153
+    const val DEFAULT_LONGITUDE = 150.2665
+    const val DEFAULT_TIMEZONE_ID = "Australia/Sydney"
     const val SOURCE="OPEN_METEO_BEST_MATCH"
 }

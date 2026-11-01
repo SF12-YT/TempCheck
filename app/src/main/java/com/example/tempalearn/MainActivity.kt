@@ -26,11 +26,6 @@ import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
 import android.widget.Toast
-import androidx.work.Constraints
-import androidx.work.ExistingPeriodicWorkPolicy
-import androidx.work.NetworkType
-import androidx.work.PeriodicWorkRequestBuilder
-import androidx.work.WorkManager
 import java.time.Instant
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
@@ -85,7 +80,7 @@ class MainActivity : Activity() {
         NotificationHelper.createChannel(this)
         buildInterface()
         uiBuilt = true
-        scheduleDailySync()
+        DailySyncScheduler.ensureScheduled(applicationContext)
         refreshDashboard()
         requestNotificationPermissionIfNeeded()
         if (shouldAutoSync()) syncNow(manual = false)
@@ -606,9 +601,9 @@ class MainActivity : Activity() {
         val locationKey = AppPreferences.activeLocationKey(prefs, location)
         val initialImportNeeded = !prefs.getBoolean(AppPreferences.historyCompleteKey(locationKey), false)
         statusText.text = if (initialImportNeeded) {
-            "Downloading the complete Open-Meteo historical archive to this phone, then pre-training…"
+            "Downloading the complete Open-Meteo historical archive, then importing the recent hourly window…"
         } else {
-            "Refreshing Open-Meteo Best Match hourly history and updating the local model…"
+            "Refreshing the latest 24-hour Open-Meteo Forecast API window and updating the local model…"
         }
         executor.execute {
             try {
@@ -618,9 +613,9 @@ class MainActivity : Activity() {
                     syncButton.isEnabled = true
                     syncButton.alpha = 1f
                     val importText = if (result.initialImportCompletedNow) {
-                        "Initial 2000-present Open-Meteo historical archive imported"
+                        "Initial 2000-present historical archive and recent Forecast API window imported"
                     } else {
-                        "Latest-date Open-Meteo hourly refresh completed"
+                        "Recent Open-Meteo Forecast API hourly refresh completed"
                     }
                     val geoText = String.format(
                         Locale.getDefault(),
@@ -630,7 +625,7 @@ class MainActivity : Activity() {
                         result.locationProfile.elevationM?.let { String.format(Locale.getDefault(), "%.0f", it) } ?: "unknown"
                     )
                     locationSummaryText.text = result.resolvedAddress
-                    statusText.text = "${result.resolvedAddress} ($geoText): $importText · ${result.fetchedHours} fetched/updated hourly rows · ${result.trainingExamples} local training examples · ${result.savedReadings} stored hourly records."
+                    statusText.text = "${result.resolvedAddress} ($geoText): $importText · ${result.fetchedHours} new hourly rows (overlapping timestamps skipped) · ${result.trainingExamples} local training examples · ${result.savedReadings} stored hourly records."
                     NotificationHelper.showSyncSuccess(this, result, source = if (manual) "manual" else "automatic")
                     refreshDashboard()
                 }
@@ -710,7 +705,9 @@ class MainActivity : Activity() {
                 prefs.edit()
                     .putString(AppPreferences.KEY_LOCATION, query)
                     .putString(AppPreferences.KEY_ACTIVE_LOCATION_KEY, locationKey)
+                    .putString(AppPreferences.timezoneKey(locationKey), profile.timezoneId)
                     .apply()
+                DailySyncScheduler.rescheduleForLocation(applicationContext)
                 runOnUiThread {
                     locationSummaryText.text = profile.displayName
                     showSettings(false)
@@ -828,19 +825,7 @@ class MainActivity : Activity() {
         }
     }
 
-    private fun scheduleDailySync() {
-        val constraints = Constraints.Builder()
-            .setRequiredNetworkType(NetworkType.CONNECTED)
-            .build()
-        val request = PeriodicWorkRequestBuilder<DailySyncWorker>(24, java.util.concurrent.TimeUnit.HOURS)
-            .setConstraints(constraints)
-            .build()
-        WorkManager.getInstance(applicationContext).enqueueUniquePeriodicWork(
-            "templearn_daily_temperature_sync",
-            ExistingPeriodicWorkPolicy.KEEP,
-            request
-        )
-    }
+    private fun scheduleDailySync() = DailySyncScheduler.ensureScheduled(applicationContext)
 
     private fun newCard(color: Int = Color.WHITE): LinearLayout = LinearLayout(this).apply {
         orientation = LinearLayout.VERTICAL

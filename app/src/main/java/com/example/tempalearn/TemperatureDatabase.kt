@@ -292,10 +292,23 @@ class TemperatureDatabase(context: Context) : SQLiteOpenHelper(
     }
 
     fun insertReadings(locationKey: String, readings: List<HourlyTemperature>) {
+        insertReadingsInternal(locationKey, readings, SQLiteDatabase.CONFLICT_REPLACE)
+    }
+
+    /** Store only timestamps not already present; overlapped hours are left untouched. */
+    fun insertReadingsIfAbsent(locationKey: String, readings: List<HourlyTemperature>): Int =
+        insertReadingsInternal(locationKey, readings, SQLiteDatabase.CONFLICT_IGNORE)
+
+    private fun insertReadingsInternal(
+        locationKey: String,
+        readings: List<HourlyTemperature>,
+        conflictAlgorithm: Int
+    ): Int {
         require(readings.all { it.temperatureSource == OpenMeteoClient.SOURCE }) {
             "Only Open-Meteo Best Match hourly records may be stored as training targets."
         }
         val writable = writableDatabase
+        var insertedRows = 0
         writable.beginTransaction()
         try {
             readings.forEach { reading ->
@@ -340,12 +353,15 @@ class TemperatureDatabase(context: Context) : SQLiteOpenHelper(
                     putNullable("soil_moisture_0_7cm", reading.soilMoisture0To7cm)
                     put("temperature_source", reading.temperatureSource)
                 }
-                writable.insertWithOnConflict("readings", null, values, SQLiteDatabase.CONFLICT_REPLACE)
+                if (writable.insertWithOnConflict("readings", null, values, conflictAlgorithm) != -1L) {
+                    insertedRows++
+                }
             }
             writable.setTransactionSuccessful()
         } finally {
             writable.endTransaction()
         }
+        return insertedRows
     }
 
     fun getAllReadings(locationKey: String): List<HourlyTemperature> {

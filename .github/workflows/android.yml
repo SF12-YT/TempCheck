@@ -104,7 +104,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          version_name="$(sed -nE 's/^[[:space:]]*versionName = "([^"]+)".*/\\1/p' app/build.gradle.kts | head -n 1)"
+          version_name="$(awk -F'"' '/versionName[[:space:]]*=/ {print $2; exit}' app/build.gradle.kts)"
           : "${version_name:?Could not read app versionName}"
           tag="v${version_name}"
           apk_name="TempLearn-${version_name}.apk"
