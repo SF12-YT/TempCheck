@@ -671,16 +671,25 @@ class TemperatureDatabase(context: Context) : SQLiteOpenHelper(
         }
     }
 
-    /** Only completed, timestamp-matched predictions can teach the correction layer. */
-    fun getVerifiedPredictionErrors(locationKey: String, limit: Int = 200): List<PredictionErrorSample> {
-        val safeLimit = limit.coerceIn(1, 500)
+    /** Count all forecasts that are still waiting for their target-hour reading. */
+    fun getPendingPredictionCount(locationKey: String): Int {
+        readableDatabase.rawQuery(
+            "SELECT COUNT(*) FROM prediction_feedback WHERE location_key=? AND actual_temp_c IS NULL",
+            arrayOf(locationKey)
+        ).use { cursor ->
+            return if (cursor.moveToFirst()) cursor.getInt(0) else 0
+        }
+    }
+
+    /** Return every completed, timestamp-matched prediction; this history has no sample cap. */
+    fun getVerifiedPredictionErrors(locationKey: String): List<PredictionErrorSample> {
         val result = mutableListOf<PredictionErrorSample>()
         readableDatabase.rawQuery(
             """SELECT target_timestamp_sec, predicted_temp_c, actual_temp_c, local_hour,
                 temperature_trend_c, cloud_cover_pct, solar_radiation_wm2, weather_code
                 FROM prediction_feedback
                 WHERE location_key=? AND actual_temp_c IS NOT NULL AND error_c IS NOT NULL
-                ORDER BY target_timestamp_sec DESC LIMIT $safeLimit""".trimIndent(),
+                ORDER BY target_timestamp_sec DESC""".trimIndent(),
             arrayOf(locationKey)
         ).use { cursor ->
             while (cursor.moveToNext()) {
