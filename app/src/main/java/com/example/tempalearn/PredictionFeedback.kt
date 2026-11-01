@@ -196,9 +196,9 @@ fun predictAndStoreNextHour(
     )
     val adjustedTemperature = (base.second + correction.correctionC).coerceIn(-90.0, 70.0)
 
-    // Old historical endpoints can lag the clock. Never turn a retrospective estimate into
-    // a supposed live forecast-training example.
-    if (base.first >= nowSec - 300L) {
+    // Only genuinely prospective predictions may enter the feedback dataset. Never label
+    // an estimate produced after its target hour as a forecast.
+    if (base.first > nowSec) {
         val localHour = runCatching {
             Instant.ofEpochSecond(base.first).atZone(ZoneId.of(timezoneId)).hour
         }.getOrDefault(Instant.ofEpochSecond(base.first).atZone(ZoneId.of("UTC")).hour)
