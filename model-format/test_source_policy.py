@@ -79,7 +79,7 @@ class SourcePolicyTests(unittest.TestCase):
         self.assertIn('splitCsv(line).mapIndexed(::normalizeCsvHeaderCell)', client)
         self.assertIn('header = normalizedCells', client)
         self.assertIn('Header preview:', client)
-        self.assertIn('versionName = "0.10.1"', (ROOT / "app/build.gradle.kts").read_text(encoding="utf-8"))
+        self.assertIn('versionName = "0.10.2"', (ROOT / "app/build.gradle.kts").read_text(encoding="utf-8"))
 
     def test_archive_streams_csv_and_json_and_preserves_missing_fields(self):
         client = (KOTLIN / "OpenMeteoClient.kt").read_text(encoding="utf-8")
@@ -206,7 +206,7 @@ class SourcePolicyTests(unittest.TestCase):
 
     def test_database_discards_legacy_provider_data_on_upgrade(self):
         database = (KOTLIN / "TemperatureDatabase.kt").read_text(encoding="utf-8")
-        self.assertIn("DATABASE_VERSION = 12", database)
+        self.assertIn("DATABASE_VERSION = 13", database)
         self.assertIn("OpenMeteoClient.SOURCE", database)
         self.assertIn('db.execSQL("DELETE FROM readings")', database)
         self.assertIn('db.execSQL("DELETE FROM model_state")', database)
@@ -266,6 +266,36 @@ class SourcePolicyTests(unittest.TestCase):
         self.assertIn("run: gradle --no-daemon assembleRelease", workflow)
         self.assertIn("verify --verbose --print-certs app/build/outputs/apk/release/app-release.apk", workflow)
         self.assertIn("run: gradle --no-daemon assembleDebug", workflow)
+
+    def test_verified_prediction_errors_drive_conservative_live_calibration(self):
+        feedback = (KOTLIN / "PredictionFeedback.kt").read_text(encoding="utf-8")
+        database = (KOTLIN / "TemperatureDatabase.kt").read_text(encoding="utf-8")
+        sync = (KOTLIN / "SyncRepository.kt").read_text(encoding="utf-8")
+        main = (KOTLIN / "MainActivity.kt").read_text(encoding="utf-8")
+        self.assertIn("MINIMUM_VERIFIED_PREDICTIONS = 8", feedback)
+        self.assertIn("actualTempC - sample.predictedTempC", feedback)
+        self.assertIn("temperatureTrendC", feedback)
+        self.assertIn("cloudCoverPct", feedback)
+        self.assertIn("solarRadiationWm2", feedback)
+        self.assertIn("weatherBucket", feedback)
+        self.assertIn("coerceIn(-3.5, 3.5)", feedback)
+        self.assertIn("getVerifiedPredictionErrors", database)
+        self.assertIn("actual_temp_c IS NOT NULL AND error_c IS NOT NULL", database)
+        self.assertIn("reconcilePendingPredictions(locationKey)", sync)
+        self.assertIn("predictAndStoreNextHour(", sync)
+        self.assertIn("predictAndStoreNextHour(", main)
+        self.assertIn("prediction_feedback", database)
+        self.assertIn("actual_temp_c IS NULL", database)
+
+    def test_historical_json_is_deleted_only_after_successful_training(self):
+        sync = (KOTLIN / "SyncRepository.kt").read_text(encoding="utf-8")
+        orchestration = sync.split("fun sync(", 1)[1]
+        self.assertIn("trained.modelReady", orchestration)
+        self.assertIn('downloaded.localArchivePath.endsWith(".json"', orchestration)
+        self.assertIn("historicalJson.delete()", orchestration)
+        self.assertLess(orchestration.index("pretrainHistoricalDataset"), orchestration.index("historicalJson.delete()"))
+        self.assertIn("db.clearPredictionFeedback(locationKey)", sync)
+        self.assertIn("The full hourly series is stored in SQLite", sync)
 
     def test_archive_retries_rate_limits(self):
         client = (KOTLIN / "OpenMeteoClient.kt").read_text(encoding="utf-8")
