@@ -134,7 +134,7 @@ object OpenMeteoClient {
                 readTimeout = 180_000
                 setRequestProperty("Accept", "text/csv")
                 setRequestProperty("Accept-Encoding", "identity")
-                setRequestProperty("User-Agent", "TempLearn-Android/0.9.8")
+                setRequestProperty("User-Agent", "TempLearn-Android/0.9.9")
             }
             try {
                 val code = connection.responseCode
