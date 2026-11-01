@@ -652,9 +652,9 @@ class MainActivity : Activity() {
         val locationKey = AppPreferences.activeLocationKey(prefs, location)
         val initialImportNeeded = !prefs.getBoolean(AppPreferences.historyCompleteKey(locationKey), false)
         statusText.text = if (initialImportNeeded) {
-            "Downloading the complete Open-Meteo historical archive, then importing the recent hourly window…"
+            "Downloading and importing the complete Open-Meteo historical archive, then training from it before the recent hourly refresh…"
         } else {
-            "Refreshing the latest 24-hour Open-Meteo Forecast API window and updating the local model…"
+            "Refreshing recent Open-Meteo hours and updating the local model…"
         }
         executor.execute {
             try {
@@ -664,7 +664,7 @@ class MainActivity : Activity() {
                     syncButton.isEnabled = true
                     syncButton.alpha = 1f
                     val importText = if (result.initialImportCompletedNow) {
-                        "Initial 2000-present historical archive and recent Forecast API window imported"
+                        "Initial 2000-present historical archive imported and used for model training"
                     } else {
                         "Recent Open-Meteo Forecast API hourly refresh completed"
                     }
@@ -676,8 +676,13 @@ class MainActivity : Activity() {
                         result.locationProfile.elevationM?.let { String.format(Locale.getDefault(), "%.0f", it) } ?: "unknown"
                     )
                     locationSummaryText.text = result.resolvedAddress
-                    statusText.text = "${result.resolvedAddress} ($geoText): $importText · ${result.fetchedHours} new hourly rows (overlapping timestamps skipped) · ${result.trainingExamples} local training examples · ${result.savedReadings} stored hourly records."
-                    NotificationHelper.showSyncSuccess(this, result, source = if (manual) "manual" else "automatic")
+                    val refreshWarning = result.recentUpdateWarning?.let {
+                        " Recent 24-hour refresh failed; historical learning is retained and the app will retry: $it"
+                    }.orEmpty()
+                    statusText.text = "${result.resolvedAddress} ($geoText): $importText · ${result.fetchedHours} new hourly rows (overlapping timestamps skipped) · ${result.trainingExamples} local training examples · ${result.savedReadings} stored hourly records.$refreshWarning"
+                    if (result.recentUpdateWarning == null) {
+                        NotificationHelper.showSyncSuccess(this, result, source = if (manual) "manual" else "automatic")
+                    }
                     refreshDashboard()
                 }
             } catch (error: Exception) {
