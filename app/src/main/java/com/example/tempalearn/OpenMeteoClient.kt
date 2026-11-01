@@ -134,7 +134,7 @@ object OpenMeteoClient {
                 readTimeout = 180_000
                 setRequestProperty("Accept", "text/csv")
                 setRequestProperty("Accept-Encoding", "identity")
-                setRequestProperty("User-Agent", "TempLearn-Android/0.9.6")
+                setRequestProperty("User-Agent", "TempLearn-Android/0.9.8")
             }
             try {
                 val code = connection.responseCode
@@ -230,24 +230,28 @@ object OpenMeteoClient {
         }
     }
 
+    private fun normalizeCsvHeaderCell(index: Int, value: String): String {
+        val cleaned = if (index == 0) value.trim().removePrefix("\uFEFF") else value.trim()
+        return cleaned.substringBefore(" (").trim()
+    }
+
     private fun validateCsvHeader(file: File) {
-        val validHeader = BufferedReader(InputStreamReader(FileInputStream(file), Charsets.UTF_8)).use { reader ->
-            var found = false
+        var validHeader = false
+        BufferedReader(InputStreamReader(FileInputStream(file), Charsets.UTF_8)).use { reader ->
             repeat(30) {
                 val line = reader.readLine() ?: return@repeat
-                val cells = splitCsv(line).mapIndexed { index, value ->
-                    if (index == 0) value.trim().removePrefix("\uFEFF") else value.trim()
-                }
-                val fields = cells.toSet()
-                if (cells.firstOrNull() == "time" && hourlyFields.all { it in fields }) {
-                    found = true
-                    return@use true
+                val cells = splitCsv(line).mapIndexed(::normalizeCsvHeaderCell)
+                if (cells.firstOrNull() == "time" && hourlyFields.all { it in cells }) {
+                    validHeader = true
+                    return@use
                 }
             }
-            found
         }
         if (!validHeader) {
-            throw IOException("The downloaded CSV is incomplete or has no hourly header containing all 15 requested fields.")
+            val preview = BufferedReader(InputStreamReader(FileInputStream(file), Charsets.UTF_8)).use { reader ->
+                generateSequence { reader.readLine() }.take(8).joinToString(" | ") { it.take(180) }
+            }
+            throw IOException("CSV header is missing requested hourly fields. Header preview: " + preview.take(500))
         }
     }
 
@@ -290,8 +294,11 @@ object OpenMeteoClient {
             val line = reader.readLine() ?: break
             if (line.isBlank()) continue
             val cells = splitCsv(line)
-            if (cells.firstOrNull()?.trim()?.equals("time", true) == true && cells.any { it.trim() == "temperature_2m" }) {
-                header = cells.map { it.trim() }
+            val normalizedCells = cells.mapIndexed(::normalizeCsvHeaderCell)
+            if (normalizedCells.firstOrNull()?.equals("time", true) == true &&
+                normalizedCells.any { it == "temperature_2m" }
+            ) {
+                header = normalizedCells
                 indices = header!!.withIndex().associate { it.value to it.index }
                 val missing = hourlyFields.filterNot { it in indices }
                 if (missing.isNotEmpty()) throw IOException("CSV is missing requested fields: ${missing.joinToString()}")

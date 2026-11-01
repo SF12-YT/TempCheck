@@ -49,8 +49,8 @@ android {
         applicationId = "com.example.tempalearn"
         minSdk = 26
         targetSdk = 34
-        versionCode = 22
-        versionName = "0.9.7"
+        versionCode = 23
+        versionName = "0.9.8"
     }
 
     compileOptions {
