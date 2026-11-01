@@ -677,7 +677,7 @@ class MainActivity : Activity() {
                     )
                     locationSummaryText.text = result.resolvedAddress
                     val refreshWarning = result.recentUpdateWarning?.let {
-                        " Recent 24-hour refresh failed; historical learning is retained and the app will retry: $it"
+                        " Yesterday-and-today refresh failed; historical learning is retained and the app will retry: $it"
                     }.orEmpty()
                     statusText.text = "${result.resolvedAddress} ($geoText): $importText · ${result.fetchedHours} new hourly rows (overlapping timestamps skipped) · ${result.trainingExamples} local training examples · ${result.savedReadings} stored hourly records.$refreshWarning"
                     if (result.recentUpdateWarning == null) {
