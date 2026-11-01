@@ -99,18 +99,21 @@ object OpenMeteoClient {
         latitude: Double,
         longitude: Double,
         timezoneId: String,
+        startDate: LocalDate,
+        endDate: LocalDate,
         destination: File,
         onProgress: (ArchiveFileProgress) -> Unit = {}
     ): File {
         require(latitude.isFinite() && latitude in -90.0..90.0)
         require(longitude.isFinite() && longitude in -180.0..180.0)
+        require(!endDate.isBefore(startDate)) { "The recent-data end date precedes its start date." }
         ZoneId.of(timezoneId)
         val timezone = URLEncoder.encode(timezoneId, Charsets.UTF_8.name())
         val url = URL(
             "https://api.open-meteo.com/v1/forecast?latitude=$latitude&longitude=$longitude" +
-                "&hourly=${hourlyFields.joinToString(",")}&timezone=$timezone&past_days=1&forecast_days=0" +
-                "&timeformat=unixtime&temperature_unit=celsius&wind_speed_unit=kmh" +
-                "&precipitation_unit=mm&format=csv"
+                "&hourly=${hourlyFields.joinToString(",")}&start_date=$startDate&end_date=$endDate" +
+                "&timezone=$timezone&models=best_match&timeformat=unixtime" +
+                "&temperature_unit=celsius&wind_speed_unit=kmh&precipitation_unit=mm&format=csv"
         )
         return downloadCsvToFile(url, destination, "Open-Meteo Forecast API", onProgress)
     }
@@ -134,7 +137,7 @@ object OpenMeteoClient {
                 readTimeout = 180_000
                 setRequestProperty("Accept", "text/csv")
                 setRequestProperty("Accept-Encoding", "identity")
-                setRequestProperty("User-Agent", "TempLearn-Android/0.9.9")
+                setRequestProperty("User-Agent", "TempLearn-Android/0.10.0")
             }
             try {
                 val code = connection.responseCode
