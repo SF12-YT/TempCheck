@@ -73,29 +73,31 @@ object PredictionErrorLearner {
 
         // Context effects are shrunk toward the global bias and kept deliberately modest.
         // They are learned independently so a handful of unusual hours cannot dominate.
-        val hourAdjustment = groupAdjustment(recent.filter { it.localHour == targetHour }, globalBias, 0.40)
+        // Compare each context group with the unshrunk baseline. Comparing against the
+        // confidence-shrunk value would make identical groups reintroduce the removed bias.
+        val hourAdjustment = groupAdjustment(recent.filter { it.localHour == targetHour }, rawGlobalBias, 0.40)
         val trendKey = trendBucket(temperatureTrendC)
         val trendAdjustment = groupAdjustment(
             recent.filter { trendBucket(it.temperatureTrendC) == trendKey },
-            globalBias,
+            rawGlobalBias,
             0.35
         )
         val cloudKey = cloudBucket(cloudCoverPct)
         val cloudAdjustment = if (cloudKey == null) 0.0 else groupAdjustment(
             recent.filter { cloudBucket(it.cloudCoverPct) == cloudKey },
-            globalBias,
+            rawGlobalBias,
             0.25
         )
         val solarKey = solarBucket(solarRadiationWm2)
         val solarAdjustment = if (solarKey == null) 0.0 else groupAdjustment(
             recent.filter { solarBucket(it.solarRadiationWm2) == solarKey },
-            globalBias,
+            rawGlobalBias,
             0.25
         )
         val weatherKey = weatherBucket(weatherCode)
         val weatherAdjustment = if (weatherKey == null) 0.0 else groupAdjustment(
             recent.filter { weatherBucket(it.weatherCode) == weatherKey },
-            globalBias,
+            rawGlobalBias,
             0.15
         )
 
