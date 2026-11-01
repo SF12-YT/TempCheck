@@ -137,6 +137,9 @@ class SourcePolicyTests(unittest.TestCase):
         main = (KOTLIN / "MainActivity.kt").read_text(encoding="utf-8")
         self.assertIn("historical learning is retained", main)
         self.assertIn("recentUpdateWarning", main)
+        notification = (KOTLIN / "NotificationHelper.kt").read_text(encoding="utf-8")
+        self.assertIn("historical learning was retained", notification)
+        self.assertIn("history ready; recent refresh pending", notification)
 
     def test_reduced_archive_invalidates_models_after_reimport(self):
         sync = (KOTLIN / "SyncRepository.kt").read_text(encoding="utf-8")
