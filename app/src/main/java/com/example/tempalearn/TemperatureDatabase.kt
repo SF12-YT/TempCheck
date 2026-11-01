@@ -313,8 +313,6 @@ class TemperatureDatabase(context: Context) : SQLiteOpenHelper(
             db.execSQL("DROP TABLE IF EXISTS daily_weather")
             db.execSQL("DROP TABLE IF EXISTS hourly_forecast")
         }
-    }
-
         if (oldVersion < 13) {
             // v0.10.2 adds separate storage for predictions and their later verified errors.
             createPredictionFeedbackTable(db)
