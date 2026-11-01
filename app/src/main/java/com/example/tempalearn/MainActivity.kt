@@ -564,7 +564,7 @@ class MainActivity : Activity() {
                         predicted.verifiedPredictions
                     )
                 } else {
-                    "Learning from matched forecasts ${predicted.verifiedPredictions}/${PredictionErrorLearner.MINIMUM_VERIFIED_PREDICTIONS}"
+                    "Verified forecasts ${predicted.verifiedPredictions}/${PredictionErrorLearner.MINIMUM_VERIFIED_PREDICTIONS} · awaiting target-hour observations"
                 }
                 predictionSubtext.text = "$modelDescription · ${formatter.format(localTime)} local time · $feedbackDescription"
             } else {
