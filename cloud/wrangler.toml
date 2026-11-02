@@ -12,6 +12,8 @@ database_name = "templearn-forecasts"
 database_id = "f6af2944-b2b9-43d0-ab87-886cacc632b8"
 migrations_dir = "migrations"
 
+# Non-secret deployment configuration. Keep SYNC_KEY out of vars and source control.
+# Configure it separately with: npx wrangler secret put SYNC_KEY
 [vars]
 LOCATION_ID = "mount-boyce-au"
 LATITUDE = "-33.6153"
