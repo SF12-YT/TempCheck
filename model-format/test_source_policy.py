@@ -168,7 +168,9 @@ class SourcePolicyTests(unittest.TestCase):
         forecast = client.split("fun downloadRecentHourlyForecastToFile", 1)[1].split(
             "private fun downloadCsvToFile", 1
         )[0]
-        self.assertIn("&past_hours=24&forecast_hours=0", forecast)
+        self.assertIn("&past_hours=$safePastHours&forecast_hours=0", forecast)
+        self.assertIn("pastHours: Int = 24", forecast)
+        self.assertIn("pastHours.coerceIn(1, 24 * 92)", forecast)
         self.assertNotIn("start_date=", forecast)
         self.assertNotIn("end_date=", forecast)
         self.assertIn("&models=best_match", forecast)
