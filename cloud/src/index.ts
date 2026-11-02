@@ -1,5 +1,11 @@
 import { predict } from "./inference";
-interface Env { DB: D1Database; LOCATION_ID: string; TIMEZONE: string; }
+interface Env { DB: D1Database; LOCATION_ID: string; TIMEZONE: string; SYNC_KEY?: string; }
+async function ensureSchema(env:Env) {
+ await env.DB.prepare("CREATE TABLE IF NOT EXISTS cloud_model_state (location_id TEXT PRIMARY KEY NOT NULL, weights_json TEXT NOT NULL, observations_json TEXT NOT NULL, feedback_json TEXT NOT NULL, context_json TEXT NOT NULL, timezone TEXT NOT NULL, model_version TEXT NOT NULL, updated_at TEXT NOT NULL)").run();
+}
+function authorized(request:Request,env:Env):boolean {
+ return !!env.SYNC_KEY && request.headers.get("x-templearn-key")===env.SYNC_KEY;
+}
 function json(data: unknown, status=200) { return new Response(JSON.stringify(data), {status,headers:{"content-type":"application/json","access-control-allow-origin":"*","cache-control":"no-store"}}); }
 async function generate(env:Env, issuedMs:number) {
  const row=await env.DB.prepare("SELECT weights_json, observations_json, feedback_json, context_json, timezone, model_version FROM cloud_model_state WHERE location_id=?").bind(env.LOCATION_ID).first<Record<string,unknown>>();
@@ -22,6 +28,8 @@ export default {
    return json({location_id:env.LOCATION_ID,forecasts:(rows.results||[]).map((r:Record<string,unknown>)=>({location_id:r.location_id,issued_at:r.issued_at,target_time:r.target_time,source:r.source,prediction:JSON.parse(String(r.payload_json))}))});
   }
   if(url.pathname==="/v1/state"&&request.method==="POST"){
+   if(!authorized(request,env)) return json({error:"Unauthorized; configure SYNC_KEY in Worker secrets"},401);
+   await ensureSchema(env);
    let body:any; try{body=await request.json();}catch{return json({error:"Invalid JSON"},400);}
    if(!Array.isArray(body.weights)||body.weights.length!==62||!body.weights.every(Number.isFinite)) return json({error:"Expected 62 finite model weights"},400);
    if(!Array.isArray(body.observations)||body.observations.length<3) return json({error:"Three hourly observations required"},400);
@@ -31,8 +39,8 @@ export default {
     .bind(env.LOCATION_ID,JSON.stringify(body.weights),JSON.stringify(obs),JSON.stringify(body.feedback||[]),JSON.stringify(body.context||{}),String(body.timezone||env.TIMEZONE),String(body.modelVersion||"templearn-62-v1"),new Date().toISOString()).run();
    return json({ok:true,observations_received:3,model_version:body.modelVersion||"templearn-62-v1"});
   }
-  if(url.pathname==="/v1/run"&&request.method==="POST") {try{return json(await generate(env,Date.now()));}catch(e){return json({error:e instanceof Error?e.message:"Prediction failed"},422);}}
+  if(url.pathname==="/v1/run"&&request.method==="POST") {if(!authorized(request,env)) return json({error:"Unauthorized"},401); try{await ensureSchema(env);return json(await generate(env,Date.now()));}catch(e){return json({error:e instanceof Error?e.message:"Prediction failed"},422);}}
   return json({error:"Not found"},404);
  },
- async scheduled(event:ScheduledController,env:Env){await generate(env,event.scheduledTime);}
+ async scheduled(event:ScheduledController,env:Env){await ensureSchema(env);await generate(env,event.scheduledTime);}
 };
