@@ -350,10 +350,12 @@ object SyncRepository {
                 val required = (elapsed + 3_599L) / 3_600L + 2L
                 required.coerceIn(24L, 24L * 92L).toInt()
             } ?: 24
-            val recentForecastFile = File(
-                archiveDirectory,
-                "recent_forecast_past_${pendingLookbackHours}h.csv"
-            )
+            // Reuse one temporary CSV so an hourly refresh does not accumulate a
+            // separate, progressively larger lookback file every hour.
+            archiveDirectory.listFiles { file ->
+                file.isFile && file.name.startsWith("recent_forecast_past_") && file.name.endsWith("h.csv")
+            }?.forEach { it.delete() }
+            val recentForecastFile = File(archiveDirectory, "recent_forecast_past.csv")
             OpenMeteoClient.downloadRecentHourlyForecastToFile(
                 profile.latitude,
                 profile.longitude,
