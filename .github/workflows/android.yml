@@ -41,6 +41,12 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
+      - name: Build Cloudflare Worker bundle
+        working-directory: cloud
+        run: |
+          npm install
+          npm run build
+
       - name: Set up Java 17
         uses: actions/setup-java@v6
         with:

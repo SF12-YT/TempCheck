@@ -609,62 +609,62 @@ class MainActivity : Activity() {
                 "Shared weather model is still learning. The first location builds a wider history; new postcodes can use shared patterns after this model is trained."
             }
 
-            // A newly selected place can borrow the shared geographical model immediately;
-            // once enough local hourly history exists, its locally adapted model takes precedence.
-            val predictionModel = model ?: sharedModel?.takeIf { profile != null }
-            val predicted = predictionModel?.let {
-                predictAndStoreNextHour(
-                    database = db,
-                    locationKey = locationKey,
-                    readings = all,
-                    model = it,
-                    timezoneId = zoneId,
-                    locationContext = profile?.modelContext() ?: ModelLocationContext()
-                )
+            // Forecasting and learning now live in the cloud. Android reads the last
+            // cached dashboard and never calls the local predictor from the UI.
+            val cachedDashboard = prefs.getString("cloud_dashboard_$locationKey", null)
+            val cloudDashboard = cachedDashboard?.let {
+                runCatching { org.json.JSONObject(it) }.getOrNull()
             }
-            if (predicted != null) {
-                predictionText.text = String.format(Locale.getDefault(), "%.1f °C", predicted.temperatureC)
+            val cloudCounts = cloudDashboard?.optJSONObject("counts")
+            val latestForecast = cloudDashboard?.optJSONObject("latestForecast")
+            val prediction = latestForecast?.optJSONObject("prediction")
+            val predictedTempC = prediction?.let { value ->
+                if (value.has("predictedTempC") && !value.isNull("predictedTempC")) {
+                    value.optDouble("predictedTempC", Double.NaN).takeIf { it.isFinite() }
+                } else null
+            }
+            if (prediction != null && predictedTempC != null) {
+                predictionText.text = String.format(Locale.getDefault(), "%.1f °C", predictedTempC)
+                val targetTimestamp = prediction.optLong(
+                    "targetTimestampSec",
+                    runCatching { Instant.parse(latestForecast?.optString("targetTime")).epochSecond }.getOrDefault(0L)
+                )
                 val formatter = DateTimeFormatter.ofPattern("EEE, d MMM · h:mm a", Locale.US)
-                val localTime = Instant.ofEpochSecond(predicted.targetTimestampSec).atZone(ZoneId.of(zoneId))
-                val modelDescription = if (model != null) "Location-adapted estimate" else "Shared-model estimate · adapting to this location"
-                val replayChecks = db.getVerifiedPredictionCount(
-                    locationKey,
-                    PredictionVerificationMethod.WALK_FORWARD_REPLAY
-                )
-                val liveVerified = db.getVerifiedPredictionCount(
-                    locationKey,
-                    PredictionVerificationMethod.LIVE
-                )
-                val pendingPredictions = db.getPendingPredictionCount(locationKey)
-                val pendingDetails = db.getPendingPredictionDiagnostics(locationKey, 3)
+                val localTime = Instant.ofEpochSecond(targetTimestamp)
+                    .atZone(runCatching { ZoneId.of(zoneId) }.getOrElse { ZoneId.systemDefault() })
+                val modelDescription = when {
+                    model != null -> "Cloud-trained location model"
+                    sharedModel != null -> "Cloud shared model · adapting to this location"
+                    else -> "Cloud TempLearn model"
+                }
+                val replayChecks = cloudCounts?.optInt("walkForwardVerified", 0)
+                    ?: db.getVerifiedPredictionCount(locationKey, PredictionVerificationMethod.WALK_FORWARD_REPLAY)
+                val liveVerified = cloudCounts?.optInt("liveVerified", 0)
+                    ?: db.getVerifiedPredictionCount(locationKey, PredictionVerificationMethod.LIVE)
+                val pendingPredictions = cloudCounts?.optInt("pendingForecasts", 0)
+                    ?: db.getPendingPredictionCount(locationKey)
+                val correction = prediction.optDouble("correctionC", 0.0)
                 val feedbackDescription = String.format(
                     Locale.getDefault(),
-                    "%d walk-forward backtest checks · %d live forecast-feed matches · correction %+.1f°C · %d pending",
+                    "%d walk-forward checks · %d live verified · correction %+.1f°C · %d pending",
                     replayChecks,
                     liveVerified,
-                    predicted.correctionC,
+                    correction,
                     pendingPredictions
                 )
-                val pendingDetailText = pendingDetails.joinToString(" · ") { pending ->
-                    val targetLabel = DateTimeFormatter.ofPattern("EEE d MMM, h:mm a", Locale.US)
-                        .format(Instant.ofEpochSecond(pending.targetTimestampSec).atZone(ZoneId.of(zoneId)))
-                    when {
-                        pending.matchingReadingTempC != null ->
-                            "$targetLabel: matching reading is stored"
-                        pending.targetTimestampSec <= Instant.now().epochSecond ->
-                            "$targetLabel: target hour passed; provider value not loaded"
-                        else ->
-                            "$targetLabel: waiting for target hour"
-                    }
-                }
-                val pendingSuffix = if (pendingDetailText.isBlank()) "" else "\nPending targets: $pendingDetailText"
-                predictionSubtext.text = "$modelDescription · ${formatter.format(localTime)} local time · $feedbackDescription$pendingSuffix"
+                predictionSubtext.text =
+                    "$modelDescription · ${formatter.format(localTime)} local time · $feedbackDescription"
             } else {
                 predictionText.text = "— °C"
-                predictionSubtext.text = if (all.size < 4) {
-                    "The historical archive will be imported and pre-trained automatically on first launch."
-                } else {
-                    "Three consecutive hours are needed to estimate the next point."
+                predictionSubtext.text = when {
+                    cloudDashboard == null ->
+                        "Connect to TempLearn cloud and refresh to retrieve its forecast."
+                    cloudDashboard.optJSONObject("bootstrap")?.optBoolean("complete", false) != true ->
+                        "The historical archive is still being transferred to the cloud."
+                    all.size < 4 ->
+                        "Waiting for enough completed hourly observations."
+                    else ->
+                        "The cloud model is training or waiting for its next completed hourly input."
                 }
             }
         } finally {

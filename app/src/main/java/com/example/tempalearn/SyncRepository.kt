@@ -548,129 +548,57 @@ object SyncRepository {
         onArchiveProgress: (ArchiveDownloadProgress) -> Unit = {},
         onTrainingProgress: (TrainingProgress) -> Unit = {}
     ): SyncResult {
+        // The complete historical archive remains cached locally for the UI and recovery.
+        // It is transferred to D1 once, in resumable pages, so Cloudflare owns all training.
         val downloaded = downloadHistoricalDataset(context, location, selectedProfile, onArchiveProgress)
-        val existingDb = TemperatureDatabase(context)
-        val existingModels = try {
-            Pair(
-                existingDb.getModel(downloaded.locationKey),
-                existingDb.getModel(AppPreferences.SHARED_MODEL_KEY)
-            )
-        } finally {
-            existingDb.close()
-        }
-        val existingLocalModel = existingModels.first
-        val existingSharedModel = existingModels.second
-
-        // On first import (or if either required model is missing), fit from the historical
-        // archive before making the separate recent-data request.
-        var trained = if (
-            downloaded.initialImportCompletedNow ||
-            existingLocalModel == null ||
-            existingSharedModel == null
-        ) {
-            onTrainingProgress(TrainingProgress(5, "Historical archive imported; training from the saved history…"))
-            pretrainHistoricalDataset(context, location, onTrainingProgress)
-        } else {
-            TrainingResult(
-                locationKey = downloaded.locationKey,
-                trainingExamples = existingLocalModel.trainingExamples,
-                sharedTrainingExamples = existingSharedModel.trainingExamples,
-                modelReady = true
-            )
-        }
-
-        // Snapshot a prospective one-hour estimate BEFORE requesting newer hourly rows.
-        // The fetched rows may contain the target hour; saving only after the refresh would
-        // miss the forecast/observation pair that this feedback learner is meant to evaluate.
-        runCatching {
-            storeProspectivePredictionBeforeRefresh(
-                context = context,
-                locationKey = downloaded.locationKey,
-                locationProfile = downloaded.locationProfile
-            )
-        }
-
-        var recentRows = 0
-        var recentUpdateWarning: String? = null
+        val database = TemperatureDatabase(context)
         try {
-            onTrainingProgress(TrainingProgress(88, "Historical model is ready; refreshing the latest hourly data…"))
-            recentRows = refreshRecentForecastDataset(context, location, onArchiveProgress)
-        } catch (error: Exception) {
-            recentUpdateWarning = (error.message ?: "The recent hourly update could not be completed.")
-                .take(400)
-        }
+            onTrainingProgress(TrainingProgress(3, "Connecting to the TempLearn cloud engine…"))
+            val cloud = CloudSyncClient.bootstrapAndSync(
+                context = context,
+                profile = downloaded.locationProfile,
+                database = database,
+                onProgress = onTrainingProgress
+            )
 
-        // If the recent request contributed new timestamps, refit to include them. If it failed,
-        // retain the already-trained historical model and let the next scheduled sync retry.
-        if (recentRows > 0) {
-            trained = pretrainHistoricalDataset(context, location, onTrainingProgress)
-        }
-
-        // The source JSON is disposable only after the historical rows have been fitted into
-        // a usable local model. If training failed or there were too few examples, keep it so a
-        // later run can retry safely. A previously trained installation can also clean up a
-        // leftover JSON from an earlier app version.
-        if (
-            trained.modelReady &&
-            downloaded.initialHistoryComplete &&
-            downloaded.localArchivePath.endsWith(".json", ignoreCase = true)
-        ) {
-            val historicalJson = File(downloaded.localArchivePath)
-            if (historicalJson.isFile) {
-                historicalJson.delete()
+            // Only discard the temporary download after the complete archive is safely in
+            // the cloud and the cloud has produced a usable trained model. SQLite stays intact.
+            if (cloud.bootstrapComplete && cloud.modelReady &&
+                downloaded.initialHistoryComplete &&
+                downloaded.localArchivePath.endsWith(".json", ignoreCase = true)
+            ) {
+                val historicalJson = File(downloaded.localArchivePath)
+                if (historicalJson.isFile) historicalJson.delete()
             }
-        }
 
-        val finalDb = TemperatureDatabase(context)
-        val finalCounts = try {
-            val latestReadings = finalDb.getLatestReadings(downloaded.locationKey, 72)
-            val predictionModel = finalDb.getModel(downloaded.locationKey)
-                ?: finalDb.getModel(AppPreferences.SHARED_MODEL_KEY)
-            if (predictionModel != null) {
-                predictAndStoreNextHour(
-                    database = finalDb,
-                    locationKey = downloaded.locationKey,
-                    readings = latestReadings,
-                    model = predictionModel,
-                    timezoneId = downloaded.locationProfile.timezoneId,
-                    locationContext = downloaded.locationProfile.modelContext()
-                )
-                // Cloud upload is best-effort: it must never invalidate a successful local sync.
-                runCatching {
-                    CloudSyncClient.upload(
-                        profile = downloaded.locationProfile,
-                        model = predictionModel,
-                        readings = latestReadings,
-                        feedback = finalDb.getVerifiedPredictionErrors(downloaded.locationKey)
-                    )
-                }
-            }
-            val latest = finalDb.getLatestTimestampSec(downloaded.locationKey)
-            val endDate = latest?.let {
-                Instant.ofEpochSecond(it).atZone(ZoneId.of(downloaded.locationProfile.timezoneId)).toLocalDate().toString()
+            val latestTimestamp = database.getLatestTimestampSec(downloaded.locationKey)
+            val endDate = latestTimestamp?.let {
+                Instant.ofEpochSecond(it)
+                    .atZone(ZoneId.of(downloaded.locationProfile.timezoneId))
+                    .toLocalDate()
+                    .toString()
             } ?: downloaded.importedToDate
-            Triple(finalDb.getSavedCount(downloaded.locationKey), endDate, finalDb.getModel(AppPreferences.SHARED_MODEL_KEY)?.trainingExamples ?: trained.sharedTrainingExamples)
-        } finally {
-            finalDb.close()
-        }
 
-        return SyncResult(
-            locationKey = downloaded.locationKey,
-            fetchedHours = downloaded.fetchedHours + recentRows,
-            savedReadings = finalCounts.first,
-            trainingExamples = trained.trainingExamples,
-            timezoneId = downloaded.locationProfile.timezoneId,
-            modelReady = trained.modelReady,
-            resolvedAddress = downloaded.locationProfile.displayName,
-            locationCount = TemperatureDatabase(context).useCountLocationsSafely(),
-            sharedTrainingExamples = finalCounts.third,
-            initialHistoryComplete = downloaded.initialHistoryComplete,
-            initialImportCompletedNow = downloaded.initialImportCompletedNow,
-            importedFromDate = downloaded.importedFromDate,
-            importedToDate = finalCounts.second,
-            locationProfile = downloaded.locationProfile,
-            recentUpdateWarning = recentUpdateWarning
-        )
+            return SyncResult(
+                locationKey = downloaded.locationKey,
+                fetchedHours = downloaded.fetchedHours + cloud.newlyImportedHours,
+                savedReadings = database.getSavedCount(downloaded.locationKey),
+                trainingExamples = cloud.trainingExamples,
+                timezoneId = downloaded.locationProfile.timezoneId,
+                modelReady = cloud.modelReady,
+                resolvedAddress = downloaded.locationProfile.displayName,
+                locationCount = database.getLocationCount(),
+                sharedTrainingExamples = cloud.sharedTrainingExamples,
+                initialHistoryComplete = downloaded.initialHistoryComplete,
+                initialImportCompletedNow = downloaded.initialImportCompletedNow,
+                importedFromDate = downloaded.importedFromDate,
+                importedToDate = endDate,
+                locationProfile = downloaded.locationProfile,
+                recentUpdateWarning = null
+            )
+        } finally {
+            database.close()
+        }
     }
 
     /**

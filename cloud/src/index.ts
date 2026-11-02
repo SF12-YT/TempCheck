@@ -149,6 +149,18 @@ async function ensureSchema(env: Env): Promise<void> {
   )`).run();
   await ensureColumn(env, "cloud_verified_forecasts", "verification_method", "TEXT NOT NULL DEFAULT 'LIVE'");
   await env.DB.prepare("CREATE INDEX IF NOT EXISTS idx_cloud_verified_time ON cloud_verified_forecasts(location_id,target_timestamp_sec)").run();
+  await env.DB.prepare(`CREATE TABLE IF NOT EXISTS cloud_imported_feedback (
+    location_id TEXT NOT NULL,
+    target_timestamp_sec INTEGER NOT NULL,
+    predicted_temp_c REAL NOT NULL,
+    actual_temp_c REAL NOT NULL,
+    local_hour INTEGER NOT NULL,
+    temperature_trend_c REAL NOT NULL,
+    cloud_cover_pct REAL,
+    solar_radiation_wm2 REAL,
+    weather_code INTEGER,
+    PRIMARY KEY(location_id,target_timestamp_sec)
+  )`).run();
 
   await env.DB.prepare(`CREATE TABLE IF NOT EXISTS cloud_bootstrap_state (
     location_id TEXT PRIMARY KEY NOT NULL,
@@ -156,9 +168,19 @@ async function ensureSchema(env: Env): Promise<void> {
     expected_rows INTEGER NOT NULL DEFAULT 0,
     uploaded_rows INTEGER NOT NULL DEFAULT 0,
     last_uploaded_timestamp_sec INTEGER NOT NULL DEFAULT 0,
+    expected_feedback INTEGER NOT NULL DEFAULT 0,
+    uploaded_feedback INTEGER NOT NULL DEFAULT 0,
+    last_uploaded_feedback_timestamp_sec INTEGER NOT NULL DEFAULT 0,
+    feedback_complete INTEGER NOT NULL DEFAULT 0,
     started_at TEXT NOT NULL,
     completed_at TEXT
   )`).run();
+  for (const [column, declaration] of [
+    ["expected_feedback", "INTEGER NOT NULL DEFAULT 0"],
+    ["uploaded_feedback", "INTEGER NOT NULL DEFAULT 0"],
+    ["last_uploaded_feedback_timestamp_sec", "INTEGER NOT NULL DEFAULT 0"],
+    ["feedback_complete", "INTEGER NOT NULL DEFAULT 0"]
+  ]) await ensureColumn(env,"cloud_bootstrap_state",column,declaration);
   await env.DB.prepare(`CREATE TABLE IF NOT EXISTS cloud_learning_state (
     location_id TEXT PRIMARY KEY NOT NULL,
     last_replay_target_sec INTEGER NOT NULL DEFAULT 0
@@ -189,7 +211,7 @@ async function getLocation(env: Env, locationId: string): Promise<{ context: Mod
   };
 }
 async function bootstrapState(env: Env, locationId: string): Promise<DbRow | null> {
-  return env.DB.prepare("SELECT complete,expected_rows,uploaded_rows,last_uploaded_timestamp_sec,started_at,completed_at FROM cloud_bootstrap_state WHERE location_id=?")
+  return env.DB.prepare("SELECT complete,expected_rows,uploaded_rows,last_uploaded_timestamp_sec,expected_feedback,uploaded_feedback,last_uploaded_feedback_timestamp_sec,feedback_complete,started_at,completed_at FROM cloud_bootstrap_state WHERE location_id=?")
     .bind(locationId).first<DbRow>();
 }
 
@@ -284,16 +306,15 @@ async function loadTrainingExamples(
   ).bind(locationId).first<DbRow>();
   const observationCount = Number(base?.count || 0);
   if (observationCount < 4) return { examples: [], startSec: Number(base?.first_ts || 0), endSec: Number(base?.last_ts || 0), observationCount };
-  const params: unknown[] = beforeTimestampSec == null
-    ? [locationId]
-    : [locationId, beforeTimestampSec];
-  const cutoffSql = beforeTimestampSec == null ? "" : " AND timestamp_sec < ?";
+  // Rank the COMPLETE history before applying a replay cutoff. Android's sampler
+  // chooses four-hour windows by absolute history index, then replay filters those
+  // selected readings to pre-cutoff times. This preserves the same sampling schedule.
   const sql = `
     WITH ranked AS (
       SELECT timestamp_sec,payload_json,
         ROW_NUMBER() OVER (ORDER BY timestamp_sec ASC) AS row_num
       FROM cloud_observations
-      WHERE location_id=?${cutoffSql}
+      WHERE location_id=?
     ),
     sequenced AS (
       SELECT timestamp_sec,payload_json,row_num,
@@ -309,11 +330,10 @@ async function loadTrainingExamples(
     FROM sequenced
     WHERE ((row_num - 1) % MAX(4,CAST((? + 3999) / 4000 AS INTEGER))) = 3
       AND timestamp_sec-p1_ts=3600 AND p1_ts-p2_ts=3600 AND p2_ts-p3_ts=3600
+      AND (? IS NULL OR timestamp_sec < ?)
     ORDER BY timestamp_sec ASC
   `;
-  const queryParams = beforeTimestampSec == null
-    ? [locationId, observationCount]
-    : [locationId, beforeTimestampSec, observationCount];
+  const queryParams = [locationId, observationCount, beforeTimestampSec ?? null, beforeTimestampSec ?? null];
   const result = await env.DB.prepare(sql).bind(...queryParams).all<DbRow>();
   const examples: TrainingExample[] = [];
   for (const row of result.results || []) {
@@ -366,32 +386,91 @@ async function loadModel(env: Env, locationId: string): Promise<{ model: Learned
   };
 }
 
+async function saveTrainedModel(
+  env: Env, modelId: string, model: LearnedModel,
+  location: { context: ModelContext; timezone: string }, lastTrainedThroughSec: number
+): Promise<void> {
+  const latest = modelId === SHARED_MODEL_KEY ? [] : await latestObservations(env,modelId,3);
+  await env.DB.prepare(`INSERT INTO cloud_model_state
+    (location_id,weights_json,observations_json,feedback_json,context_json,timezone,model_version,updated_at,
+     training_examples,validation_mae_c,validation_bias_c,validation_examples,trained_at_sec,
+     training_start_sec,training_end_sec,trained_location_count,last_trained_through_sec)
+    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+    ON CONFLICT(location_id) DO UPDATE SET
+     weights_json=excluded.weights_json,observations_json=excluded.observations_json,feedback_json='[]',
+     context_json=excluded.context_json,timezone=excluded.timezone,model_version=excluded.model_version,
+     updated_at=excluded.updated_at,training_examples=excluded.training_examples,
+     validation_mae_c=excluded.validation_mae_c,validation_bias_c=excluded.validation_bias_c,
+     validation_examples=excluded.validation_examples,trained_at_sec=excluded.trained_at_sec,
+     training_start_sec=excluded.training_start_sec,training_end_sec=excluded.training_end_sec,
+     trained_location_count=excluded.trained_location_count,last_trained_through_sec=excluded.last_trained_through_sec`)
+    .bind(modelId,JSON.stringify(model.weights),JSON.stringify(latest),JSON.stringify([]),JSON.stringify(location.context),
+      location.timezone,MODEL_VERSION,new Date().toISOString(),model.trainingExamples,model.validationMaeC,
+      model.validationBiasC,model.validationExamples,model.trainedAtSec,model.trainingStartSec,
+      model.trainingEndSec,model.trainedLocationCount,lastTrainedThroughSec).run();
+}
+
+const SHARED_MODEL_KEY = "__templearn_shared_weather_model__";
+
+function prepareSeriesExamples(
+  training: { examples: TrainingExample[]; startSec: number; endSec: number }
+): SeriesExamples | null {
+  const examples = training.examples;
+  if (examples.length < 8) return null;
+  const split = Math.min(Math.max(Math.floor(examples.length * 0.8),1),examples.length-1);
+  return {
+    all: examples,
+    training: examples.slice(0,split),
+    validation: examples.slice(split),
+    startSec: training.startSec,
+    endSec: training.endSec
+  };
+}
+
+/** Port of Android historical pretraining: local model regularised toward the model
+ * trained on the other bootstrapped locations, plus a persistent shared geographic model.
+ */
 async function trainModel(env: Env, locationId: string, beforeTimestampSec?: number): Promise<LearnedModel | null> {
-  const location = await getLocation(env, locationId);
-  const training = await loadTrainingExamples(env, locationId, location.timezone, location.context, beforeTimestampSec);
+  const activeLocation = await getLocation(env,locationId);
+  const activeTraining = await loadTrainingExamples(env,locationId,activeLocation.timezone,activeLocation.context,beforeTimestampSec);
+
+  if (beforeTimestampSec != null) {
+    return trainLocalFromExamples(
+      activeTraining.examples,activeTraining.startSec,activeTraining.endSec,null,Math.floor(Date.now()/1000)
+    );
+  }
+
+  const locations = await env.DB.prepare(`SELECT l.location_id FROM cloud_locations l
+    INNER JOIN cloud_bootstrap_state b ON b.location_id=l.location_id
+    WHERE b.complete=1 ORDER BY l.location_id ASC`).all<DbRow>();
+
+  const preparedByLocation = new Map<string,SeriesExamples>();
+  for (const row of locations.results || []) {
+    const id = String(row.location_id);
+    const loc = await getLocation(env,id);
+    const data = id === locationId ? activeTraining :
+      await loadTrainingExamples(env,id,loc.timezone,loc.context);
+    const prepared = prepareSeriesExamples(data);
+    if (prepared) preparedByLocation.set(id,prepared);
+  }
+
+  const activePrepared = preparedByLocation.get(locationId);
+  if (!activePrepared) return null;
+
+  const otherSeries = [...preparedByLocation.entries()]
+    .filter(([id])=>id!==locationId).map(([,value])=>value);
+  const prior = trainSharedFromSeriesExamples(otherSeries,Math.floor(Date.now()/1000));
   const model = trainLocalFromExamples(
-    training.examples, training.startSec, training.endSec, null, Math.floor(Date.now() / 1000)
+    activePrepared.all,activePrepared.startSec,activePrepared.endSec,prior,Math.floor(Date.now()/1000)
   );
   if (!model) return null;
-  if (beforeTimestampSec == null) {
-    const latest = await latestObservations(env, locationId, 3);
-    await env.DB.prepare(`INSERT INTO cloud_model_state
-      (location_id,weights_json,observations_json,feedback_json,context_json,timezone,model_version,updated_at,
-       training_examples,validation_mae_c,validation_bias_c,validation_examples,trained_at_sec,
-       training_start_sec,training_end_sec,trained_location_count,last_trained_through_sec)
-      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-      ON CONFLICT(location_id) DO UPDATE SET
-       weights_json=excluded.weights_json,observations_json=excluded.observations_json,feedback_json='[]',
-       context_json=excluded.context_json,timezone=excluded.timezone,model_version=excluded.model_version,
-       updated_at=excluded.updated_at,training_examples=excluded.training_examples,
-       validation_mae_c=excluded.validation_mae_c,validation_bias_c=excluded.validation_bias_c,
-       validation_examples=excluded.validation_examples,trained_at_sec=excluded.trained_at_sec,
-       training_start_sec=excluded.training_start_sec,training_end_sec=excluded.training_end_sec,
-       trained_location_count=excluded.trained_location_count,last_trained_through_sec=excluded.last_trained_through_sec`)
-      .bind(locationId,JSON.stringify(model.weights),JSON.stringify(latest),JSON.stringify([]),JSON.stringify(location.context),
-        location.timezone,MODEL_VERSION,new Date().toISOString(),model.trainingExamples,model.validationMaeC,
-        model.validationBiasC,model.validationExamples,model.trainedAtSec,model.trainingStartSec,
-        model.trainingEndSec,model.trainedLocationCount,training.endSec).run();
+
+  const shared = trainSharedFromSeriesExamples(
+    [...preparedByLocation.values()],Math.floor(Date.now()/1000)
+  );
+  await saveTrainedModel(env,locationId,model,activeLocation,activeTraining.endSec);
+  if (shared) {
+    await saveTrainedModel(env,SHARED_MODEL_KEY,shared,activeLocation,shared.trainingEndSec);
   }
   return model;
 }
@@ -404,24 +483,46 @@ async function latestObservations(env: Env, locationId: string, limit: number): 
 }
 
 async function loadCloudFeedback(env: Env, locationId: string, beforeTimestampSec?: number): Promise<ErrorSample[]> {
-  const query = beforeTimestampSec == null
+  const liveQuery = beforeTimestampSec == null
     ? env.DB.prepare(`SELECT target_timestamp_sec,predicted_temp_c,actual_temp_c,local_hour,temperature_trend_c,
         cloud_cover_pct,solar_radiation_wm2,weather_code FROM cloud_verified_forecasts
         WHERE location_id=? ORDER BY target_timestamp_sec DESC LIMIT 5000`).bind(locationId)
     : env.DB.prepare(`SELECT target_timestamp_sec,predicted_temp_c,actual_temp_c,local_hour,temperature_trend_c,
         cloud_cover_pct,solar_radiation_wm2,weather_code FROM cloud_verified_forecasts
         WHERE location_id=? AND target_timestamp_sec<? ORDER BY target_timestamp_sec DESC LIMIT 5000`).bind(locationId,beforeTimestampSec);
-  const result = await query.all<DbRow>();
-  return (result.results || []).map(row => ({
-    targetTimestampSec: Number(row.target_timestamp_sec),
-    predictedTempC: Number(row.predicted_temp_c),
-    actualTempC: Number(row.actual_temp_c),
-    localHour: Number(row.local_hour),
-    temperatureTrendC: Number(row.temperature_trend_c),
-    cloudCoverPct: row.cloud_cover_pct == null ? null : Number(row.cloud_cover_pct),
-    solarRadiationWm2: row.solar_radiation_wm2 == null ? null : Number(row.solar_radiation_wm2),
-    weatherCode: row.weather_code == null ? null : Number(row.weather_code)
-  }));
+  const importedQuery = beforeTimestampSec == null
+    ? env.DB.prepare(`SELECT target_timestamp_sec,predicted_temp_c,actual_temp_c,local_hour,temperature_trend_c,
+        cloud_cover_pct,solar_radiation_wm2,weather_code FROM cloud_imported_feedback
+        WHERE location_id=? ORDER BY target_timestamp_sec DESC LIMIT 5000`).bind(locationId)
+    : env.DB.prepare(`SELECT target_timestamp_sec,predicted_temp_c,actual_temp_c,local_hour,temperature_trend_c,
+        cloud_cover_pct,solar_radiation_wm2,weather_code FROM cloud_imported_feedback
+        WHERE location_id=? AND target_timestamp_sec<? ORDER BY target_timestamp_sec DESC LIMIT 5000`).bind(locationId,beforeTimestampSec);
+  const [liveResult, importedResult] = await Promise.all([
+    liveQuery.all<DbRow>(), importedQuery.all<DbRow>()
+  ]);
+  const byTarget = new Map<number,ErrorSample>();
+  for (const row of importedResult.results || []) {
+    byTarget.set(Number(row.target_timestamp_sec),{
+      targetTimestampSec:Number(row.target_timestamp_sec),predictedTempC:Number(row.predicted_temp_c),
+      actualTempC:Number(row.actual_temp_c),localHour:Number(row.local_hour),
+      temperatureTrendC:Number(row.temperature_trend_c),
+      cloudCoverPct:row.cloud_cover_pct==null?null:Number(row.cloud_cover_pct),
+      solarRadiationWm2:row.solar_radiation_wm2==null?null:Number(row.solar_radiation_wm2),
+      weatherCode:row.weather_code==null?null:Number(row.weather_code)
+    });
+  }
+  // A cloud-generated verification supersedes an imported local sample for the same target.
+  for (const row of liveResult.results || []) {
+    byTarget.set(Number(row.target_timestamp_sec),{
+      targetTimestampSec:Number(row.target_timestamp_sec),predictedTempC:Number(row.predicted_temp_c),
+      actualTempC:Number(row.actual_temp_c),localHour:Number(row.local_hour),
+      temperatureTrendC:Number(row.temperature_trend_c),
+      cloudCoverPct:row.cloud_cover_pct==null?null:Number(row.cloud_cover_pct),
+      solarRadiationWm2:row.solar_radiation_wm2==null?null:Number(row.solar_radiation_wm2),
+      weatherCode:row.weather_code==null?null:Number(row.weather_code)
+    });
+  }
+  return [...byTarget.values()].sort((a,b)=>b.targetTimestampSec-a.targetTimestampSec).slice(0,5000);
 }
 
 async function recordVerifiedForecast(
@@ -480,8 +581,9 @@ async function runWalkForwardReplay(env: Env, locationId: string, nowSec: number
     if (recent.length === 3 && recent[1].timestampSec-recent[0].timestampSec===HOUR &&
         recent[2].timestampSec-recent[1].timestampSec===HOUR &&
         target.timestampSec-recent[2].timestampSec===HOUR) {
+      const priorFeedback = feedback.filter(sample => sample.targetTimestampSec < target.timestampSec);
       const prediction = predict({
-        weights: replayModel.weights, observations: recent, feedback,
+        weights: replayModel.weights, observations: recent, feedback: priorFeedback,
         targetTimestampSec: target.timestampSec, timezone: location.timezone,
         context: location.context, predictionMadeAtSec: recent[2].timestampSec,
         modelVersion: MODEL_VERSION + "-walk-forward"
@@ -518,20 +620,23 @@ async function runWalkForwardReplay(env: Env, locationId: string, nowSec: number
 }
 
 async function generateForecast(env: Env, locationId: string, nowSec: number): Promise<PredictionResult | null> {
-  const state = await loadModel(env,locationId);
+  const location = await getLocation(env,locationId);
+  const localState = await loadModel(env,locationId);
+  const state = localState || await loadModel(env,SHARED_MODEL_KEY);
   if (!state) return null;
   const observations = await latestObservations(env,locationId,3);
   if (observations.length !== 3 ||
       observations[1].timestampSec-observations[0].timestampSec!==HOUR ||
       observations[2].timestampSec-observations[1].timestampSec!==HOUR) return null;
-  // Mount Boyce/Sydney uses an exact whole-hour UTC offset, so the next local hour
-  // is also the next UTC hour. No provider forecast temperature is used.
+  // Current Mount Boyce/Sydney civil-hour boundaries align to UTC hour boundaries.
+  // Only completed observations are features; no provider forecast temperatures are used.
   const targetSec = (Math.floor(nowSec / HOUR) + 1) * HOUR;
   const feedback = await loadCloudFeedback(env,locationId);
   const prediction = predict({
     weights: state.model.weights, observations, feedback,
-    targetTimestampSec: targetSec, timezone: state.timezone,
-    context: state.context, predictionMadeAtSec: nowSec, modelVersion: state.modelVersion
+    targetTimestampSec: targetSec, timezone: location.timezone,
+    context: location.context, predictionMadeAtSec: nowSec,
+    modelVersion: localState ? state.modelVersion : state.modelVersion + "-shared-prior"
   });
   await env.DB.prepare(`INSERT OR IGNORE INTO forecast_vintages
     (location_id,issued_at,target_time,source,payload_json)
@@ -586,6 +691,7 @@ async function getCounts(env: Env, locationId: string): Promise<Record<string, n
 
 async function dashboard(env: Env, locationId: string): Promise<Record<string, unknown>> {
   const state = await loadModel(env,locationId);
+  const sharedState = await loadModel(env,SHARED_MODEL_KEY);
   const bootstrap = await bootstrapState(env,locationId);
   const observations = await latestObservations(env,locationId,72);
   const latestForecastRow = await env.DB.prepare(`SELECT issued_at,target_time,payload_json FROM forecast_vintages
@@ -615,7 +721,18 @@ async function dashboard(env: Env, locationId: string): Promise<Record<string, u
       trainingStartSec: state.model.trainingStartSec,
       trainingEndSec: state.model.trainingEndSec,
       trainedLocationCount: state.model.trainedLocationCount,
-      modelVersion: state.modelVersion
+      modelVersion: state.modelVersion,
+      usesSharedPrior: !!state.model.trainingPriorWeights
+    } : null,
+    sharedModel: sharedState ? {
+      weights: sharedState.model.weights,
+      trainingExamples: sharedState.model.trainingExamples,
+      validationMaeC: sharedState.model.validationMaeC,
+      validationBiasC: sharedState.model.validationBiasC,
+      validationExamples: sharedState.model.validationExamples,
+      trainedAtSec: sharedState.model.trainedAtSec,
+      trainedLocationCount: sharedState.model.trainedLocationCount,
+      modelVersion: sharedState.modelVersion
     } : null,
     latestForecast,
     observations,
@@ -632,7 +749,7 @@ async function handleRequest(request: Request, env: Env): Promise<Response> {
   if (url.pathname === "/health" && request.method === "GET") {
     return json({
       ok: true, service: "templearn-cloud",
-      engine: "cloud-authoritative ridge-regression + online error correction + walk-forward replay",
+      engine: "cloud-authoritative 62-feature training + local/shared models + online error correction + walk-forward replay",
       featureCount: 62, androidRole: "user-interface-and-cache",
       recentInputHours: 96, futureProviderTemperatureInputs: false
     });
@@ -668,6 +785,10 @@ async function handleRequest(request: Request, env: Env): Promise<Response> {
       expectedRows: Number(state?.expected_rows || 0),
       uploadedRows: Number(state?.uploaded_rows || 0),
       lastUploadedTimestampSec: Number(state?.last_uploaded_timestamp_sec || 0),
+      expectedFeedbackRows: Number(state?.expected_feedback || 0),
+      uploadedFeedbackRows: Number(state?.uploaded_feedback || 0),
+      lastUploadedFeedbackTimestampSec: Number(state?.last_uploaded_feedback_timestamp_sec || 0),
+      feedbackComplete: Number(state?.feedback_complete || 0) === 1,
       cloudObservationCount: Number(count?.count || 0)
     });
   }
@@ -687,10 +808,14 @@ async function handleRequest(request: Request, env: Env): Promise<Response> {
       .bind(locationId,latitude,longitude,finiteNumber(body.elevationM),timezone,new Date().toISOString()).run();
     const existing = await bootstrapState(env,locationId);
     if (!existing || Number(existing.complete) !== 1) {
-      await env.DB.prepare(`INSERT INTO cloud_bootstrap_state(location_id,complete,expected_rows,uploaded_rows,last_uploaded_timestamp_sec,started_at)
-        VALUES(?,0,?,0,0,?) ON CONFLICT(location_id) DO UPDATE SET
-        expected_rows=excluded.expected_rows,started_at=excluded.started_at`)
-        .bind(locationId,Math.max(0,Math.floor(Number(body.expectedRows || 0))),new Date().toISOString()).run();
+      await env.DB.prepare(`INSERT INTO cloud_bootstrap_state
+        (location_id,complete,expected_rows,uploaded_rows,last_uploaded_timestamp_sec,expected_feedback,
+         uploaded_feedback,last_uploaded_feedback_timestamp_sec,feedback_complete,started_at)
+        VALUES(?,0,?,0,0,?,0,0,0,?)
+        ON CONFLICT(location_id) DO UPDATE SET
+        expected_rows=excluded.expected_rows,expected_feedback=excluded.expected_feedback,started_at=excluded.started_at`)
+        .bind(locationId,Math.max(0,Math.floor(Number(body.expectedRows || 0))),
+          Math.max(0,Math.floor(Number(body.expectedFeedbackRows || 0))),new Date().toISOString()).run();
     }
     return json({ ok: true, locationId, alreadyComplete: Number(existing?.complete || 0) === 1 });
   }
@@ -716,6 +841,71 @@ async function handleRequest(request: Request, env: Env): Promise<Response> {
       .bind(inserted,lastTimestamp,locationId).run();
     return json({ ok: true, received: rows.length, inserted, lastUploadedTimestampSec: lastTimestamp });
   }
+  if (url.pathname === "/v1/bootstrap/feedback/batch" && request.method === "POST") {
+    await ensureSchema(env);
+    let body: any; try { body = await request.json(); } catch { return json({ error: "Invalid JSON" },400); }
+    const locationId = String(body.locationId || env.LOCATION_ID);
+    if (!Array.isArray(body.feedback) || body.feedback.length < 1 || body.feedback.length > 1500) {
+      return json({ error: "Each feedback batch must contain 1–1500 samples" },400);
+    }
+    const state = await bootstrapState(env,locationId);
+    if (!state || Number(state.complete) === 1 || Number(state.feedback_complete) === 1) {
+      return json({ error: "Feedback bootstrap is not open for this location" },409);
+    }
+    const samples = body.feedback.map((raw: any) => {
+      const targetTimestampSec = finiteNumber(raw?.targetTimestampSec);
+      const predictedTempC = finiteNumber(raw?.predictedTempC);
+      const actualTempC = finiteNumber(raw?.actualTempC);
+      const localHour = finiteNumber(raw?.localHour);
+      const temperatureTrendC = finiteNumber(raw?.temperatureTrendC);
+      if (targetTimestampSec === null || predictedTempC === null || actualTempC === null ||
+          localHour === null || temperatureTrendC === null) return null;
+      return {
+        targetTimestampSec,predictedTempC,actualTempC,localHour,temperatureTrendC,
+        cloudCoverPct:finiteNumber(raw?.cloudCoverPct),
+        solarRadiationWm2:finiteNumber(raw?.solarRadiationWm2),
+        weatherCode:finiteNumber(raw?.weatherCode)
+      } as ErrorSample;
+    });
+    if (samples.some((sample: ErrorSample|null) => sample === null)) {
+      return json({ error: "Every feedback sample must contain valid forecast and verification values" },400);
+    }
+    const rows = samples as ErrorSample[];
+    if (rows.some((row,i)=>i>0&&row.targetTimestampSec<=rows[i-1].targetTimestampSec)) {
+      return json({ error: "Feedback batches must be ordered by increasing target timestamp" },400);
+    }
+    const statements = rows.map(row=>env.DB.prepare(`INSERT OR IGNORE INTO cloud_imported_feedback
+      (location_id,target_timestamp_sec,predicted_temp_c,actual_temp_c,local_hour,temperature_trend_c,
+       cloud_cover_pct,solar_radiation_wm2,weather_code) VALUES (?,?,?,?,?,?,?,?,?)`)
+      .bind(locationId,row.targetTimestampSec,row.predictedTempC,row.actualTempC,row.localHour,
+        row.temperatureTrendC,row.cloudCoverPct,row.solarRadiationWm2,row.weatherCode));
+    let inserted = 0;
+    for(let offset=0;offset<statements.length;offset+=100){
+      const results=await env.DB.batch(statements.slice(offset,offset+100));
+      for(const result of results) inserted+=Number(result.meta?.changes||0);
+    }
+    const lastTimestamp=rows[rows.length-1].targetTimestampSec;
+    await env.DB.prepare(`UPDATE cloud_bootstrap_state SET uploaded_feedback=uploaded_feedback+?,
+      last_uploaded_feedback_timestamp_sec=MAX(last_uploaded_feedback_timestamp_sec,?) WHERE location_id=?`)
+      .bind(inserted,lastTimestamp,locationId).run();
+    return json({ok:true,received:rows.length,inserted,lastUploadedFeedbackTimestampSec:lastTimestamp});
+  }
+  if (url.pathname === "/v1/bootstrap/feedback/complete" && request.method === "POST") {
+    await ensureSchema(env);
+    let body: any; try { body = await request.json(); } catch { return json({ error: "Invalid JSON" },400); }
+    const locationId=String(body.locationId||env.LOCATION_ID);
+    const state=await bootstrapState(env,locationId);
+    if(!state) return json({error:"Bootstrap was not started"},409);
+    const count=await env.DB.prepare("SELECT COUNT(*) AS count FROM cloud_imported_feedback WHERE location_id=?")
+      .bind(locationId).first<DbRow>();
+    if(Number(count?.count||0)<Number(state.expected_feedback||0)){
+      return json({error:"Existing feedback upload is incomplete",expectedRows:Number(state.expected_feedback||0),
+        cloudRows:Number(count?.count||0)},409);
+    }
+    await env.DB.prepare("UPDATE cloud_bootstrap_state SET feedback_complete=1 WHERE location_id=?")
+      .bind(locationId).run();
+    return json({ok:true,feedbackRows:Number(count?.count||0)});
+  }
   if (url.pathname === "/v1/bootstrap/complete" && request.method === "POST") {
     await ensureSchema(env);
     let body: any; try { body = await request.json(); } catch { return json({ error: "Invalid JSON" },400); }
@@ -726,6 +916,9 @@ async function handleRequest(request: Request, env: Env): Promise<Response> {
       .bind(locationId).first<DbRow>();
     if (Number(count?.count || 0) < Number(state.expected_rows || 0)) {
       return json({ error: "Historical upload is incomplete", expectedRows: Number(state.expected_rows || 0), cloudRows: Number(count?.count || 0) },409);
+    }
+    if (Number(state.feedback_complete || 0) !== 1) {
+      return json({ error: "Existing verified forecast feedback has not finished uploading" },409);
     }
     await env.DB.prepare("UPDATE cloud_bootstrap_state SET complete=1,completed_at=? WHERE location_id=?")
       .bind(new Date().toISOString(),locationId).run();

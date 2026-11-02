@@ -561,6 +561,16 @@ class TemperatureDatabase(context: Context) : SQLiteOpenHelper(
         return result.asReversed()
     }
 
+    /** Count only the provider's canonical Best Match rows eligible for cloud training. */
+    fun getOpenMeteoReadingCount(locationKey: String): Int {
+        readableDatabase.rawQuery(
+            "SELECT COUNT(*) FROM readings WHERE location_key=? AND temperature_source=?",
+            arrayOf(locationKey, OpenMeteoClient.SOURCE)
+        ).use { cursor ->
+            return if (cursor.moveToFirst()) cursor.getInt(0) else 0
+        }
+    }
+
     fun getSavedCount(locationKey: String): Int {
         readableDatabase.rawQuery(
             "SELECT COUNT(*) FROM readings WHERE location_key=?",
