@@ -30,7 +30,9 @@ class SourcePolicyTests(unittest.TestCase):
         self.assertIn("format=csv", archive)
         self.assertNotIn("past_days=", archive)
         self.assertIn("https://api.open-meteo.com/v1/forecast", forecast)
-        self.assertIn("&past_hours=24&forecast_hours=0", forecast)
+        self.assertIn("&past_hours=$safePastHours&forecast_hours=0", forecast)
+        self.assertIn("pastHours: Int = 24", forecast)
+        self.assertIn("pastHours.coerceIn(1, 24 * 92)", forecast)
         self.assertNotIn("start_date=", forecast)
         self.assertNotIn("end_date=", forecast)
         self.assertIn("&models=best_match", forecast)
@@ -149,7 +151,9 @@ class SourcePolicyTests(unittest.TestCase):
         self.assertNotIn("minOf(latestDate ?: archiveEndDate, archiveEndDate)", sync)
         self.assertIn("private fun refreshRecentForecastDataset", sync)
         self.assertIn("downloadRecentHourlyForecastToFile", sync)
-        self.assertIn("recent_forecast_past_24h.csv", sync)
+        self.assertIn("recent_forecast_past_${pendingLookbackHours}h.csv", sync)
+        self.assertIn("getOldestPendingPredictionTimestampSec", sync)
+        self.assertIn("pastHours = pendingLookbackHours", sync)
         self.assertNotIn("recent_forecast_yesterday_today.csv", sync)
         historical = sync.split("fun downloadHistoricalDataset", 1)[1].split("private fun refreshRecentForecastDataset", 1)[0]
         self.assertNotIn("downloadRecentHourlyForecastToFile", historical)
@@ -159,7 +163,7 @@ class SourcePolicyTests(unittest.TestCase):
         self.assertIn("catch (error: Exception)", orchestration)
         self.assertIn("recentUpdateWarning", orchestration)
 
-    def test_recent_forecast_requests_only_the_previous_24_hours(self):
+    def test_recent_forecast_requests_expandable_past_hours_for_pending_targets(self):
         client = (KOTLIN / "OpenMeteoClient.kt").read_text(encoding="utf-8")
         forecast = client.split("fun downloadRecentHourlyForecastToFile", 1)[1].split(
             "private fun downloadCsvToFile", 1
@@ -174,7 +178,7 @@ class SourcePolicyTests(unittest.TestCase):
         refresh = sync.split("private fun refreshRecentForecastDataset", 1)[1].split(
             "fun pretrainHistoricalDataset", 1
         )[0]
-        self.assertIn("profile.timezoneId,\n                recentForecastFile", refresh)
+        self.assertIn("profile.timezoneId,\n                recentForecastFile,\n                pastHours = pendingLookbackHours", refresh)
         self.assertNotIn("val yesterday =", refresh)
         self.assertIn("predictWalkForwardTarget", refresh)
         self.assertIn("db.insertReadingsIfAbsent(locationKey, listOf(reading))", refresh)
@@ -259,7 +263,7 @@ class SourcePolicyTests(unittest.TestCase):
         self.assertIn("PredictionVerificationMethod.WALK_FORWARD_REPLAY", main)
         self.assertIn("PredictionVerificationMethod.LIVE", main)
         self.assertIn("walk-forward backtest checks", main)
-        self.assertIn("live forecasts verified", main)
+        self.assertIn("live forecast-feed matches", main)
 
     def test_live_forecast_targets_next_local_hour_when_observations_lag(self):
         feedback = (KOTLIN / "PredictionFeedback.kt").read_text(encoding="utf-8")
