@@ -318,7 +318,7 @@ class TemperatureDatabase(context: Context) : SQLiteOpenHelper(
             // v0.10.2 adds separate storage for predictions and their later verified errors.
             createPredictionFeedbackTable(db)
         }
-        if (oldVersion < 14) {
+        if (oldVersion >= 13 && oldVersion < 14) {
             // v0.10.4 labels genuine live forecasts separately from strict historical
             // walk-forward checks generated before newly imported observations are inserted.
             db.execSQL("ALTER TABLE prediction_feedback ADD COLUMN verification_method TEXT NOT NULL DEFAULT 'LIVE'")
