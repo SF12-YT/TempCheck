@@ -327,6 +327,44 @@ class MainActivity : Activity() {
         }
         content.addView(saveButton, LinearLayout.LayoutParams(-1, dp(52)).apply { topMargin = dp(5); bottomMargin = dp(10) })
         addSpacer(content, 18)
+        val backgroundTestCard = newCard()
+        content.addView(backgroundTestCard, cardLayoutParams())
+        addText(backgroundTestCard, "BACKGROUND SERVICE TEST", 11f, mutedColor, true)
+        addText(
+            backgroundTestCard,
+            "Start a user-initiated foreground service that refreshes one ongoing notification every five seconds. You can leave TempLearn or swipe it away from Recents while testing. Stop it here or use Stop test in the notification.",
+            12f,
+            mutedColor,
+            false
+        ).apply { setPadding(0, dp(7), 0, dp(10)); setLineSpacing(dp(2).toFloat(), 1.0f) }
+
+        val startBackgroundTestButton = Button(this).apply {
+            text = "Start 5-second background test"
+            isAllCaps = false
+            textSize = 14f
+            setTextColor(Color.WHITE)
+            background = roundedDrawable(greenColor, 13)
+            minHeight = dp(48)
+            stateListAnimator = null
+            setOnClickListener { startBackgroundNotificationTest() }
+        }
+        backgroundTestCard.addView(startBackgroundTestButton, LinearLayout.LayoutParams(-1, dp(48)))
+
+        val stopBackgroundTestButton = Button(this).apply {
+            text = "Stop background test"
+            isAllCaps = false
+            textSize = 14f
+            setTextColor(greenColor)
+            background = roundedDrawable(Color.WHITE, 13, Color.rgb(221, 232, 227))
+            minHeight = dp(46)
+            stateListAnimator = null
+            setOnClickListener { stopBackgroundNotificationTest() }
+        }
+        backgroundTestCard.addView(
+            stopBackgroundTestButton,
+            LinearLayout.LayoutParams(-1, dp(46)).apply { topMargin = dp(7) }
+        )
+
         val modelCard = newCard()
         content.addView(modelCard, cardLayoutParams())
         addText(modelCard, "PORTABLE MACHINE-LEARNING MODEL", 11f, mutedColor, true)
@@ -804,6 +842,50 @@ class MainActivity : Activity() {
                 prefs.edit().putBoolean(AppPreferences.KEY_NOTIFICATION_PERMISSION_REQUESTED, true).apply()
             }
             .show()
+    }
+
+    private fun startBackgroundNotificationTest() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+            checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
+        ) {
+            Toast.makeText(
+                this,
+                "Allow notifications, then tap Start again.",
+                Toast.LENGTH_LONG
+            ).show()
+            requestPermissions(
+                arrayOf(Manifest.permission.POST_NOTIFICATIONS),
+                REQUEST_POST_NOTIFICATIONS
+            )
+            return
+        }
+
+        val serviceIntent = Intent(this, BackgroundNotificationTestService::class.java).apply {
+            action = BackgroundNotificationTestService.ACTION_START
+        }
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                startForegroundService(serviceIntent)
+            } else {
+                startService(serviceIntent)
+            }
+            Toast.makeText(this, "Background notification test started.", Toast.LENGTH_SHORT).show()
+        } catch (error: Exception) {
+            Toast.makeText(
+                this,
+                "Could not start background test: ${error.message ?: "service error"}",
+                Toast.LENGTH_LONG
+            ).show()
+        }
+    }
+
+    private fun stopBackgroundNotificationTest() {
+        val stopped = stopService(Intent(this, BackgroundNotificationTestService::class.java))
+        Toast.makeText(
+            this,
+            if (stopped) "Background notification test stopped." else "No background test was running.",
+            Toast.LENGTH_SHORT
+        ).show()
     }
 
     private fun shouldAutoSync(): Boolean {
