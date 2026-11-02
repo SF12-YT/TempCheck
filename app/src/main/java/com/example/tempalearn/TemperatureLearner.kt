@@ -120,21 +120,43 @@ object WeatherLearner {
         )
     }
 
-    /** Predicts the next hourly temperature using the preceding three consecutive observations. */
+    /** Maximum safe gap from the latest observation to a live target hour. */
+    const val MAX_LIVE_FORECAST_LEAD_HOURS = 3L
+
+    /** Predicts one hour after the latest observation, as used by historical training/replay. */
     fun predictNext(
         readings: List<HourlyTemperature>,
         model: LearnedWeatherModel,
         timezoneId: String,
         locationContext: ModelLocationContext = ModelLocationContext()
     ): Pair<Long, Double>? {
+        val latestTimestamp = readings.lastOrNull()?.timestampSec ?: return null
+        return predictAtTimestamp(
+            readings, model, timezoneId, latestTimestamp + 3_600L, locationContext
+        )
+    }
+
+    /**
+     * Predicts a specified future hourly target from the latest three consecutive observations.
+     * Live forecasts can target the next clock hour even when the provider's newest observation
+     * is delayed, but never extrapolate more than MAX_LIVE_FORECAST_LEAD_HOURS from that reading.
+     */
+    fun predictAtTimestamp(
+        readings: List<HourlyTemperature>,
+        model: LearnedWeatherModel,
+        timezoneId: String,
+        targetTimestampSec: Long,
+        locationContext: ModelLocationContext = ModelLocationContext()
+    ): Pair<Long, Double>? {
         if (readings.size < 3 || model.weights.size != WEIGHT_COUNT) return null
         val recent = readings.takeLast(3)
         if (recent.zipWithNext().any { (a, b) -> b.timestampSec - a.timestampSec != 3_600L }) return null
-        val nextTimestamp = readings.last().timestampSec + 3_600L
-        val features = makeFeatures(nextTimestamp, recent.reversed(), zone(timezoneId), locationContext)
+        val leadSec = targetTimestampSec - recent.last().timestampSec
+        if (leadSec <= 0L || leadSec > MAX_LIVE_FORECAST_LEAD_HOURS * 3_600L) return null
+        val features = makeFeatures(targetTimestampSec, recent.reversed(), zone(timezoneId), locationContext)
         val predicted = (dot(model.weights.toDoubleArray(), features) * TEMP_SCALE_C + BASE_TEMP_C)
             .coerceIn(-90.0, 70.0)
-        return nextTimestamp to predicted
+        return targetTimestampSec to predicted
     }
 
     private fun buildExamples(
