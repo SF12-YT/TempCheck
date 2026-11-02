@@ -3,6 +3,7 @@ package com.example.tempalearn
 import android.Manifest
 import android.app.Activity
 import android.app.AlertDialog
+import android.app.NotificationManager
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
@@ -14,6 +15,7 @@ import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
 import android.os.Build
 import android.os.Bundle
+import android.provider.Settings
 import android.text.InputType
 import android.text.method.LinkMovementMethod
 import android.util.TypedValue
@@ -367,7 +369,7 @@ class MainActivity : Activity() {
         addText(backgroundTestCard, "BACKGROUND SERVICE TEST", 11f, mutedColor, true)
         addText(
             backgroundTestCard,
-            "Start a user-initiated foreground service that refreshes one ongoing notification every five seconds. You can leave TempLearn or swipe it away from Recents while testing. Stop it here or use Stop test in the notification.",
+            "Start a foreground service that posts a separate, visible alert every five seconds. Its quiet status notification stays in the notification shade while you leave TempLearn or swipe it away from Recents. Stop it here or use Stop test in the status notification.",
             12f,
             mutedColor,
             false
@@ -603,15 +605,29 @@ class MainActivity : Activity() {
                     PredictionVerificationMethod.LIVE
                 )
                 val pendingPredictions = db.getPendingPredictionCount(locationKey)
+                val pendingDetails = db.getPendingPredictionDiagnostics(locationKey, 3)
                 val feedbackDescription = String.format(
                     Locale.getDefault(),
-                    "%d walk-forward backtest checks · %d live forecasts verified · correction %+.1f°C · %d pending",
+                    "%d walk-forward backtest checks · %d live forecast-feed matches · correction %+.1f°C · %d pending",
                     replayChecks,
                     liveVerified,
                     predicted.correctionC,
                     pendingPredictions
                 )
-                predictionSubtext.text = "$modelDescription · ${formatter.format(localTime)} local time · $feedbackDescription"
+                val pendingDetailText = pendingDetails.joinToString(" · ") { pending ->
+                    val targetLabel = DateTimeFormatter.ofPattern("EEE d MMM, h:mm a", Locale.US)
+                        .format(Instant.ofEpochSecond(pending.targetTimestampSec).atZone(ZoneId.of(zoneId)))
+                    when {
+                        pending.matchingReadingTempC != null ->
+                            "$targetLabel: matching reading is stored"
+                        pending.targetTimestampSec <= Instant.now().epochSecond ->
+                            "$targetLabel: target hour passed; provider value not loaded"
+                        else ->
+                            "$targetLabel: waiting for target hour"
+                    }
+                }
+                val pendingSuffix = if (pendingDetailText.isBlank()) "" else "\nPending targets: $pendingDetailText"
+                predictionSubtext.text = "$modelDescription · ${formatter.format(localTime)} local time · $feedbackDescription$pendingSuffix"
             } else {
                 predictionText.text = "— °C"
                 predictionSubtext.text = if (all.size < 4) {
@@ -1032,6 +1048,25 @@ class MainActivity : Activity() {
             .show()
     }
 
+    override fun onRequestPermissionsResult(
+        requestCode: Int,
+        permissions: Array<out String>,
+        grantResults: IntArray
+    ) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        if (requestCode == REQUEST_BACKGROUND_TEST_NOTIFICATIONS) {
+            if (grantResults.firstOrNull() == PackageManager.PERMISSION_GRANTED) {
+                startBackgroundNotificationTest()
+            } else {
+                Toast.makeText(
+                    this,
+                    "Notification permission was denied; the background alert test cannot display alerts.",
+                    Toast.LENGTH_LONG
+                ).show()
+            }
+        }
+    }
+
     private fun startBackgroundNotificationTest() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
             checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
@@ -1043,8 +1078,25 @@ class MainActivity : Activity() {
             ).show()
             requestPermissions(
                 arrayOf(Manifest.permission.POST_NOTIFICATIONS),
-                REQUEST_POST_NOTIFICATIONS
+                REQUEST_BACKGROUND_TEST_NOTIFICATIONS
             )
+            return
+        }
+
+        val notificationManager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+        if (!notificationManager.areNotificationsEnabled()) {
+            AlertDialog.Builder(this)
+                .setTitle("TempLearn notifications are blocked")
+                .setMessage("Enable app notifications in Android settings to see the five-second test alerts.")
+                .setPositiveButton("Open notification settings") { _, _ ->
+                    startActivity(
+                        Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS).apply {
+                            putExtra(Settings.EXTRA_APP_PACKAGE, packageName)
+                        }
+                    )
+                }
+                .setNegativeButton("Cancel", null)
+                .show()
             return
         }
 
@@ -1137,6 +1189,7 @@ class MainActivity : Activity() {
 
     companion object {
         private const val REQUEST_POST_NOTIFICATIONS = 104
+        private const val REQUEST_BACKGROUND_TEST_NOTIFICATIONS = 105
         private const val REQUEST_EXPORT_MODEL = 7412
     }
 
