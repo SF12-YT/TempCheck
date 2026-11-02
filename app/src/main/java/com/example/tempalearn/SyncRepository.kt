@@ -48,7 +48,7 @@ data class ArchiveDownloadProgress(
 ) {
     /** -1 means the server did not provide a content length; the UI should stay indeterminate. */
     val percent: Int
-        get() = if (totalBytes <= 0L) -1 else ((bytesProcessed.coerceAtLeast(0L) * 100L) / totalBytes).toInt().coerceIn(0, 100)
+        get() = if (totalBytes <= 0L) -1 else ((bytesTransferred.coerceAtLeast(0L) * 100L) / totalBytes).toInt().coerceIn(0, 100)
 }
 
 data class DatasetDownloadResult(
@@ -393,7 +393,7 @@ object SyncRepository {
                     onProgress(
                         ArchiveDownloadProgress(
                             ArchiveProgressStage.IMPORTING,
-                            transfer.bytesProcessed,
+                            transfer.bytesTransferred,
                             transfer.totalBytes
                         )
                     )
