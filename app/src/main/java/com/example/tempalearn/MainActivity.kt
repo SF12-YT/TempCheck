@@ -1111,7 +1111,7 @@ class MainActivity : Activity() {
         }
         try {
             startActivity(
-                Intent(AlarmManager.ACTION_REQUEST_SCHEDULE_EXACT_ALARM).apply {
+                Intent(Settings.ACTION_REQUEST_SCHEDULE_EXACT_ALARM).apply {
                     data = Uri.parse("package:$packageName")
                 }
             )
