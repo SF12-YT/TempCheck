@@ -1,90 +1,71 @@
-# TempLearn — Android temperature-learning prototype
+# TempLearn — Open-Meteo hourly weather learning app
 
-TempLearn collects hourly air-temperature observations from the Australian Bureau of Meteorology (BOM), stores them locally, and learns a next-hour temperature relationship on-device. The current release is **0.7.0**.
+TempLearn imports historical hourly weather from the **Open-Meteo Historical Weather API using Best Match**, retains the original dataset on-device and trains a next-hour air-temperature model locally. This release is **0.9.4**.
 
-## What's new in 0.7.0
+## First launch and historical archive
 
-- Open-Meteo Geocoding now resolves a typed place or postcode into a selectable place record with GeoNames ID, latitude, longitude, elevation, country, administrative area and IANA timezone.
-- A location profile is saved once and reused by BOM station discovery and the Open-Meteo Weather API. The chosen elevation is also passed to Open-Meteo's daily request; if geocoding has no elevation, the Open-Meteo 90 m Elevation API is tried.
-- Location histories are keyed by the stable geocoding ID. Returning to a previously selected place restores that place's saved BOM history and model. Different same-named places do not share readings.
-- The learner now has **53 features**, including normalized latitude, cyclic longitude, elevation, elevation availability and latitude/season interactions. Both local and shared models learn geographic context.
-- The model database records training coverage dates, contributing location count and the prior weights used by local adaptation. The shared model combines eligible saved places on this phone only; no other users' observations are uploaded or pooled.
-- Model export is now a ZIP model package rather than a weights-only JSON file. It includes `model.json`, the feature schema, inference contract, Python inference and training scripts, evaluation metrics, training metadata, a model card, README and requirements file.
-- Visual Crossing is no longer queried; no API key is required for TempLearn 0.7.0.
+The first-run setup page has been removed. TempLearn opens directly to the dashboard and automatically downloads the historical dataset, imports it into the local database and pre-trains the model.
 
-## Data-source boundaries
+For the default location (2780, NSW, Australia), first launch downloads the published Open-Meteo JSON snapshot from the openmeteo release in the SF12-YT/dummy-assets repository. The snapshot covers **1 January 2000 through 31 October 2026**, including the complete latest available day in that file. The transfer is one complete file, not date segments. TempLearn verifies its SHA-256 and expected byte size before promoting the download from a temporary .part file. The original JSON is then retained unchanged in the app's private on-device files directory, including hourly variables that the current learner does not yet use. If importing fails after the download completes, the saved JSON is reused rather than downloaded again.
 
-**BOM is the exclusive source for historical hourly temperature targets and historical hourly weather predictors used by the model.** Missing BOM temperatures are left missing. Missing BOM predictor fields are not filled from another provider. Each sync accumulates the latest approximately 72 hours of BOM station data into the local database, allowing the on-device history to grow over time.
+The JSON importer streams the response structure and imports the 15 hourly fields currently used by the learner in 256-row database batches. Null predictor values remain null, and rows without a valid temperature_2m target are skipped. The coordinates, elevation and timezone recorded in the JSON are used for the model's geographic context.
 
-Open-Meteo Weather contributes the previous completed local calendar day's non-temperature daily aggregates only. Requests use `past_days=1` and `forecast_days=0`; hourly variables, temperature-valued variables and forecast data are not requested. Those daily aggregates are stored separately and are not currently model features.
+Other locations continue to use a single complete CSV response from the Open-Meteo Historical Weather API. Subsequent syncs for all locations request only the latest stored date through the latest date accepted by the API, then upsert records by timestamp. This fills days missed while the app was offline without downloading the full archive again. The request end date is capped at yesterday UTC because the Archive API does not accept today's date. Routine refreshes also re-train the local model after importing new readings.
 
-Open-Meteo Geocoding provides canonical location identity, coordinates, elevation and timezone. This location metadata is used both for provider requests and as model features. Open-Meteo Elevation (global 90 m DEM) is used only when geocoding does not return elevation.
+The default-location JSON snapshot is an immutable historical dataset, not a live feed. Daily refreshes use Open-Meteo Archive API to add the latest available date after the snapshot. Historical reanalysis is a model-based reconstruction, not a direct observation from a local weather station. Best Match products and their resolution may vary across dates, so this is a continuous learning dataset rather than a homogeneous station record.
 
-## Location search and updating
+## The 15 hourly training variables
 
-1. Open **Settings** and enter a town, postcode or address. Append state/administrative area and country to narrow the search, for example `Katoomba, NSW, Australia` or `2780, NSW, Australia`.
-2. Tap **Save location & refresh**.
-3. Choose the matching result from the list. TempLearn saves its canonical ID, coordinates, elevation and timezone.
-4. The same selected location identity is passed to the BOM station selector and Open-Meteo Weather request. On later refreshes the stored profile is reused.
+| # | API variable | Unit | Why it is retained |
+|---:|---|---|---|
+| 1 | temperature_2m | °C | Air-temperature learning target |
+| 2 | relative_humidity_2m | % | Near-surface moisture |
+| 3 | dew_point_2m | °C | Near-surface water-vapour state |
+| 4 | precipitation | mm | Total preceding-hour precipitation |
+| 5 | rain | mm | Liquid precipitation component |
+| 6 | snowfall | cm | Preceding-hour snowfall |
+| 7 | weather_code | WMO code | Broad weather-condition category |
+| 8 | cloud_cover | % | Total cloud amount |
+| 9 | cloud_cover_low | % | Low cloud layer |
+| 10 | cloud_cover_mid | % | Middle cloud layer |
+| 11 | cloud_cover_high | % | High cloud layer |
+| 12 | pressure_msl | hPa | Mean sea-level pressure |
+| 13 | wind_speed_10m | km/h | Standard 10 m wind speed |
+| 14 | wind_gusts_10m | km/h | 10 m wind gusts |
+| 15 | shortwave_radiation | W/m² | Global shortwave radiation |
 
-A previous location's history is retained when switching away. Selecting the same geocoded place again returns to its stored history. If multiple results match on an initial background sync, TempLearn asks you to choose the right result in Settings rather than silently guessing.
+The retained JSON contains additional hourly variables, but the raw file is deliberately preserved intact so those columns remain available for future learning features. The current database importer only maps the learner's selected 15 fields.
 
-## Learning algorithm
+**Missing values remain missing.** TempLearn does not substitute another provider, interpolate an absent hour or invent an air-temperature target. Some variables are unavailable in some underlying reanalysis products or periods; those cells remain null.
 
-TempLearn uses **multivariable linear ridge regression trained locally with batch gradient descent**. The 53-element feature vector contains local hour and annual cycles; the preceding three consecutive BOM temperatures; the latest BOM hour's available atmospheric, wind, cloud, precipitation and radiation variables; WMO condition flags; and geographic features (latitude, cyclic longitude and elevation). The shared learner combines eligible saved locations on this phone, constructing geographic features from each place's own profile. It does not pool observations across users or a remote server. Each location also has a locally adapted model.
+## Location handling
 
-The dashboard's validation MAE and bias are calculated on chronological held-out examples. They are diagnostics, not guarantees of future accuracy. Once a shared model exists, a newly selected geocoded location can use it immediately when three consecutive BOM hours are available; after sufficient local history accumulates, its locally adapted model takes precedence. Each saved place's observations remain separate.
+Open-Meteo Geocoding resolves a typed place or postcode into a canonical place ID, coordinates, elevation and IANA timezone. Each saved place keeps its own local history and model. The geocoder's elevation is used when available; otherwise TempLearn tries the Open-Meteo Elevation API.
+
+The default location is loaded automatically on first launch. To use another location, open Settings, search for a postcode, town or address, and select the matching place. Its history is downloaded from Open-Meteo and stored separately. No GPS permission is requested.
+
+## Learning model
+
+TempLearn uses multivariable linear ridge regression trained on the phone. The feature vector contains **62 ordered features**: local hour and annual cycles; the previous three consecutive hourly temperatures; near-surface thermodynamic, pressure, wind, cloud, precipitation and radiation fields; nine additional engineered signals for snow depth, direct/diffuse radiation, boundary-layer height, 100 m wind speed/direction and shallow-soil conditions; WMO condition flags; and geographic context.
+
+Wind directions are represented with sine/cosine pairs so the 0°/360° boundary is handled correctly. Missing numeric predictors are mean-imputed only inside feature normalization; the database still stores null, and missing temperature observations or hours are never interpolated.
+
+The full hourly archive remains in SQLite. For bounded training memory, model fitting loads spaced windows of four consecutive hours, capped at approximately 4,000 candidate examples per location. Saved locations are trained separately and a shared model can use their geographic context; observations are not uploaded or pooled with other users.
+
+The dashboard's chronological held-out MAE and bias are diagnostics, not guarantees of future forecast accuracy. The model predicts temperature in the same Open-Meteo Best Match reanalysis series it was trained on, not independent station measurements.
 
 ## Portable model export
 
-Settings offers two ZIP exports:
+The app exports a standalone model package using **format version 3** and the 62-feature schema. It contains the fitted coefficients, feature definitions, inference contract, standard-library Python inference and training scripts, training metadata, validation metrics and a model card. Raw hourly readings and API credentials are not included.
 
-- **This location's model package:** fitted model for the active location, including its default timezone and geographic context.
-- **Shared model package:** model trained across contributing locations. The consuming app must provide the target location's coordinates and timezone during inference.
+## Build
 
-Each package contains:
+Run locally:
 
-| File | Purpose |
-|---|---|
-| `model.json` | Model architecture, fitted coefficients, 53-feature schema, preprocessing, geographic metadata and learned state |
-| `feature_schema.json` | Ordered machine-readable feature definitions |
-| `inference.py` | Standalone Python inference reference and CLI |
-| `trainer.py` | Standalone reference ridge-regression trainer for new BOM JSONL data |
-| `inference_contract.json` | Required inputs and provenance rules |
-| `training_metadata.json` / `evaluation.json` | Coverage and held-out metrics |
-| `MODEL_CARD.md` / `README.md` | Intended use, caveats and instructions |
-| `requirements.txt` | Runtime requirements (Python standard library only) |
+    ./gradlew --no-daemon assembleDebug
 
-Example inference command after extracting a package: `python inference.py model.json request.json`.
+The GitHub Actions workflow runs the Python model/source regression tests and builds the Android APK. It also publishes a TempLearn-source-project ZIP artifact that includes the GitHub Actions workflow and Gradle wrapper. Push and manual workflow-dispatch builds use the configured ANDROID_KEYSTORE_BASE64, ANDROID_KEYSTORE_PASSWORD, ANDROID_KEY_ALIAS and ANDROID_KEY_PASSWORD secrets to build a signed release APK, verify it with Android apksigner, and publish the APK artifact.
 
-The package contains model parameters and code, not the user's raw hourly readings or API credentials. Geographic training-location metadata is included because it is part of the learned feature context.
+## Attribution
 
-## Storage and location identity
-
-- No GPS permission is requested. Location search uses the text entered by the user and the Open-Meteo Geocoding API.
-- Hourly BOM readings, daily Open-Meteo context, selected location profiles and fitted models are stored in the app's private SQLite database.
-- Location profiles use the stable geocoding result ID. A database migration re-keys compatible legacy location records without deleting the underlying readings.
-- Switching locations does not delete another location's records.
-- The app does not send stored hourly BOM records to a server; current requests are read-only API lookups.
-
-## Build through GitHub Actions
-
-1. Extract the ZIP and push the **contents of the `TempLearn` folder** to the root of a GitHub repository. Include hidden files such as `.github`.
-2. Open the repository's **Actions** tab and choose **Build TempLearn Android APK**. Select **Run workflow**. It also runs on pushes and pull requests targeting `main` or `master`.
-3. For normal branch builds, the workflow restores and verifies the configured release signing keystore secrets, then builds `app-release.apk`. Pull requests build a debug APK.
-4. Download the APK from the completed workflow run's **Artifacts** section.
-
-No weather API key is required for TempLearn 0.7.0. The Gradle build uses GitHub Actions' configured Gradle 8.9 and Java 17. A complete Android build should be confirmed by the GitHub Actions run; this source package is not an APK.
-
-## Important limitations
-
-- BOM's public observation network is Australian and provides a rolling approximately 72-hour window. Although Open-Meteo can resolve locations worldwide, this build deliberately has no alternative historical temperature provider; places outside usable BOM coverage cannot accumulate training targets or produce an in-app next-hour estimate. Long-term training history grows only while the app is installed and successfully syncing.
-- Nearby-station selection is based on available BOM station metadata and its suitability checks; the selected station may not be exactly at the geocoded town centre.
-- The regression model is experimental and cannot capture every nonlinear atmospheric process. The shared model is shared only across saved, geocoded places on this phone; it does not pool other users' data. Its geographic generalisation depends on how representative those local training places are.
-- Open-Meteo daily aggregates are not currently used as model features. They are retained separately for future analysis, with no temperature variables requested.
-- Open-Meteo location and weather data require attribution under the provider's published terms. See https://open-meteo.com and https://creativecommons.org/licenses/by/4.0/.
-
-
-## Version 0.7.1 build fix
-
-Enabled Android `BuildConfig` generation explicitly for AGP 8.x. This fixes unresolved `BuildConfig` references in provider clients such as `VisualCrossingClient.kt`. Version code: 13.
+Historical and geocoding/elevation data are provided by Open-Meteo. Weather data is licensed under CC BY 4.0. See the [Historical Weather API documentation](https://open-meteo.com/en/docs/historical-weather-api).

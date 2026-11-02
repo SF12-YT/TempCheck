@@ -18,39 +18,48 @@ object WeatherModelExport {
         Feature("local_hour_cos", "cos(2*pi*local_hour/24)", "Daily cycle using the target location's local hour."),
         Feature("day_of_year_sin", "sin(2*pi*(day_of_year-1)/days_in_year)", "Annual seasonal cycle; leap years use 366 days."),
         Feature("day_of_year_cos", "cos(2*pi*(day_of_year-1)/days_in_year)", "Annual seasonal cycle; leap years use 366 days."),
-        Feature("temperature_t1", "(previous_temperature_1_c-20)/10", "Most recent completed BOM air temperature, Celsius."),
+        Feature("temperature_t1", "(previous_temperature_1_c-20)/10", "Most recent completed Open-Meteo Best Match air temperature, Celsius."),
         Feature("temperature_t2", "(previous_temperature_2_c-20)/10", "Air temperature two completed hours before the target."),
         Feature("temperature_t3", "(previous_temperature_3_c-20)/10", "Air temperature three completed hours before the target."),
-        Feature("dew_point", "normalize(dew_point_c,20,10)", "Latest completed hour BOM dew point, Celsius."),
-        Feature("wind_speed", "normalize(wind_speed_kmh,15,15)", "Latest completed hour BOM wind speed, km/h."),
-        Feature("wind_gust", "normalize(wind_gust_kmh,25,25)", "Latest completed hour BOM gust speed, km/h."),
-        Feature("mean_sea_level_pressure", "normalize(pressure_hpa,1013,20)", "Latest completed hour BOM mean sea-level pressure, hPa."),
-        Feature("relative_humidity", "normalize(humidity_pct,50,50)", "Latest completed hour BOM relative humidity, percent."),
-        Feature("cloud_cover_total", "normalize(cloud_cover_pct,50,50)", "Latest completed hour BOM total cloud cover, percent."),
-        Feature("precipitation", "normalize(precipitation_mm,0.5,2)", "Latest completed hour BOM precipitation, mm."),
-        Feature("shortwave_radiation", "normalize(solar_radiation_wm2,150,300)", "Latest completed hour BOM shortwave radiation, W/m2."),
+        Feature("dew_point", "normalize(dew_point_c,20,10)", "Latest completed hour Open-Meteo Best Match dew point, Celsius."),
+        Feature("wind_speed", "normalize(wind_speed_kmh,15,15)", "Latest completed hour Open-Meteo Best Match wind speed, km/h."),
+        Feature("wind_gust", "normalize(wind_gust_kmh,25,25)", "Latest completed hour Open-Meteo Best Match gust speed, km/h."),
+        Feature("mean_sea_level_pressure", "normalize(pressure_hpa,1013,20)", "Latest completed hour Open-Meteo Best Match mean sea-level pressure, hPa."),
+        Feature("relative_humidity", "normalize(humidity_pct,50,50)", "Latest completed hour Open-Meteo Best Match relative humidity, percent."),
+        Feature("cloud_cover_total", "normalize(cloud_cover_pct,50,50)", "Latest completed hour Open-Meteo Best Match total cloud cover, percent."),
+        Feature("precipitation", "normalize(precipitation_mm,0.5,2)", "Latest completed hour Open-Meteo Best Match precipitation, mm."),
+        Feature("shortwave_radiation", "normalize(solar_radiation_wm2,150,300)", "Latest completed hour Open-Meteo Best Match shortwave radiation, W/m2."),
         Feature("temperature_trend_1", "clamp((t1-t2)/5,-4,4)", "Temperature change between the two most recent observations."),
         Feature("temperature_trend_2", "clamp((t2-t3)/5,-4,4)", "Temperature change between the second and third most recent observations."),
         Feature("solar_daylight_interaction", "solar_normalized*max(0,-cos(hour_angle))", "Solar input weighted by daytime phase."),
         Feature("cloud_daylight_interaction", "cloud_normalized*max(0,-cos(hour_angle))", "Cloud cover weighted by daytime phase."),
-        Feature("cloud_cover_low", "normalize(cloud_low_pct,50,50)", "Latest completed hour BOM low cloud cover, percent."),
-        Feature("cloud_cover_mid", "normalize(cloud_mid_pct,50,50)", "Latest completed hour BOM mid cloud cover, percent."),
-        Feature("cloud_cover_high", "normalize(cloud_high_pct,50,50)", "Latest completed hour BOM high cloud cover, percent."),
-        Feature("wind_direction_sin", "wind_direction_present ? sin(radians(direction_deg)) : 0", "Circular encoding of BOM wind direction."),
-        Feature("wind_direction_cos", "wind_direction_present ? cos(radians(direction_deg)) : 0", "Circular encoding of BOM wind direction."),
-        Feature("vapour_pressure_deficit", "normalize(vapor_pressure_deficit_kpa,1,1)", "Latest completed hour BOM vapour pressure deficit, kPa."),
-        Feature("surface_pressure", "normalize(surface_pressure_hpa,1000,20)", "Latest completed hour BOM surface pressure, hPa."),
-        Feature("rain", "normalize(rain_mm,0.2,1)", "Latest completed hour BOM rain, mm."),
-        Feature("showers", "normalize(showers_mm,0.1,0.5)", "Latest completed hour BOM showers, mm."),
-        Feature("snowfall", "normalize(snowfall_cm,0,1)", "Latest completed hour BOM snowfall, cm."),
-        Feature("visibility", "normalize(visibility_m,10000,10000)", "Latest completed hour BOM visibility, metres."),
-        Feature("evapotranspiration", "normalize(evapotranspiration_mm,0.1,0.5)", "Latest completed hour BOM evapotranspiration, mm."),
-        Feature("reference_et0", "normalize(et0_mm,0.1,0.5)", "Latest completed hour BOM reference evapotranspiration, mm."),
-        Feature("uv_index", "normalize(uv_index,3,3)", "Latest completed hour BOM UV index."),
-        Feature("uv_index_clear_sky", "normalize(uv_index_clear_sky,3,3)", "Latest completed hour BOM clear-sky UV index."),
-        Feature("wet_bulb_temperature", "normalize(wet_bulb_temperature_c,20,10)", "Latest completed hour BOM wet-bulb temperature, Celsius."),
-        Feature("apparent_temperature", "normalize(apparent_temperature_c,20,10)", "Latest completed hour BOM apparent temperature, Celsius."),
-        Feature("shortwave_radiation_instant", "normalize(solar_radiation_instant_wm2,150,300)", "Latest completed hour BOM instantaneous shortwave radiation, W/m2."),
+        Feature("cloud_cover_low", "normalize(cloud_low_pct,50,50)", "Latest completed hour Open-Meteo Best Match low cloud cover, percent."),
+        Feature("cloud_cover_mid", "normalize(cloud_mid_pct,50,50)", "Latest completed hour Open-Meteo Best Match mid cloud cover, percent."),
+        Feature("cloud_cover_high", "normalize(cloud_high_pct,50,50)", "Latest completed hour Open-Meteo Best Match high cloud cover, percent."),
+        Feature("wind_direction_sin", "wind_direction_present ? sin(radians(direction_deg)) : 0", "Circular encoding of Open-Meteo Best Match wind direction."),
+        Feature("wind_direction_cos", "wind_direction_present ? cos(radians(direction_deg)) : 0", "Circular encoding of Open-Meteo Best Match wind direction."),
+        Feature("vapour_pressure_deficit", "normalize(vapor_pressure_deficit_kpa,1,1)", "Latest completed hour Open-Meteo Best Match vapour pressure deficit, kPa."),
+        Feature("surface_pressure", "normalize(surface_pressure_hpa,1000,20)", "Latest completed hour Open-Meteo Best Match surface pressure, hPa."),
+        Feature("rain", "normalize(rain_mm,0.2,1)", "Latest completed hour Open-Meteo Best Match rain, mm."),
+        Feature("showers", "normalize(showers_mm,0.1,0.5)", "Latest completed hour Open-Meteo Best Match showers, mm."),
+        Feature("snowfall", "normalize(snowfall_cm,0,1)", "Latest completed hour Open-Meteo Best Match snowfall, cm."),
+        Feature("visibility", "normalize(visibility_m,10000,10000)", "Latest completed hour Open-Meteo Best Match visibility, metres."),
+        Feature("evapotranspiration", "normalize(evapotranspiration_mm,0.1,0.5)", "Latest completed hour Open-Meteo Best Match evapotranspiration, mm."),
+        Feature("reference_et0", "normalize(et0_mm,0.1,0.5)", "Latest completed hour Open-Meteo Best Match reference evapotranspiration, mm."),
+        Feature("uv_index", "normalize(uv_index,3,3)", "Latest completed hour Open-Meteo Best Match UV index."),
+        Feature("uv_index_clear_sky", "normalize(uv_index_clear_sky,3,3)", "Latest completed hour Open-Meteo Best Match clear-sky UV index."),
+        Feature("wet_bulb_temperature", "normalize(wet_bulb_temperature_c,20,10)", "Latest completed hour Open-Meteo Best Match wet-bulb temperature, Celsius."),
+        Feature("apparent_temperature", "normalize(apparent_temperature_c,20,10)", "Latest completed hour Open-Meteo Best Match apparent temperature, Celsius."),
+        Feature("shortwave_radiation_instant", "normalize(solar_radiation_instant_wm2,150,300)", "Latest completed hour Open-Meteo Best Match instantaneous shortwave radiation, W/m2."),
+        Feature("snow_depth", "normalize(snow_depth_m,0.01,0.1)", "Snow depth in metres."),
+        Feature("direct_radiation", "normalize(direct_radiation_wm2,100,200)", "Direct solar radiation in W/m²."),
+        Feature("diffuse_radiation", "normalize(diffuse_radiation_wm2,50,100)", "Diffuse solar radiation in W/m²."),
+        Feature("boundary_layer_height", "normalize(boundary_layer_height_m,1000,1500)", "Atmospheric boundary-layer height in metres."),
+        Feature("wind_speed_100m", "normalize(wind_speed_100m_kmh,20,20)", "Wind speed at 100 metres in km/h."),
+        Feature("wind_direction_100m_sin", "wind_direction_100m_present ? sin(radians(direction_100m_deg)) : 0", "Sine encoding of 100 m wind direction."),
+        Feature("wind_direction_100m_cos", "wind_direction_100m_present ? cos(radians(direction_100m_deg)) : 0", "Cosine encoding of 100 m wind direction."),
+        Feature("soil_temperature_0_7cm", "normalize(soil_temperature_0_to_7cm_c,20,10)", "Soil temperature at 0–7 cm in Celsius."),
+        Feature("soil_moisture_0_7cm", "normalize(soil_moisture_0_to_7cm,0.25,0.25)", "Volumetric soil moisture at 0–7 cm."),
         Feature("weather_clear", "weather_code == 0 ? 1 : 0", "WMO clear-sky category."),
         Feature("weather_partly_cloudy", "weather_code in 1..3 ? 1 : 0", "WMO partly cloudy/cloudy category."),
         Feature("weather_fog", "weather_code in {45,48} ? 1 : 0", "WMO fog category."),
@@ -110,7 +119,7 @@ object WeatherModelExport {
             .put("contributing_location_count", model.trainedLocationCount)
         val root = JSONObject()
             .put("format", "templearn-weather-model")
-            .put("format_version", 2)
+            .put("format_version", 3)
             .put("exported_at_unix_seconds", System.currentTimeMillis() / 1_000L)
             .put("model_scope", modelScope)
             .put("model_name", if (modelScope == "shared") "TempLearn Shared Weather Model" else "TempLearn Location Weather Model")
@@ -121,17 +130,17 @@ object WeatherModelExport {
             .put("temperature_target", JSONObject()
                 .put("name", "next_hour_air_temperature")
                 .put("unit", "degrees_celsius")
-                .put("sole_observation_source", "BOM"))
+                .put("sole_observation_source", "OPEN_METEO_BEST_MATCH"))
             .put("data_provenance", JSONObject()
-                .put("BOM", "Exclusive source for historical air-temperature targets, previous-temperature inputs, and historical hourly weather predictors. Missing BOM fields remain missing; no other provider fills them.")
+                .put("Open-Meteo Best Match", "Exclusive source for historical air-temperature targets, previous-temperature inputs, and historical hourly weather predictors. Missing Open-Meteo Best Match fields remain missing; no other provider fills them.")
                 .put("Open-Meteo Weather", "Previous completed local-day daily context only. The request uses past_days=1 and forecast_days=0, requests only non-temperature daily aggregates, and stores them separately. These daily aggregates are not features in this model.")
                 .put("Open-Meteo Geocoding", "Provides place identity, WGS84 coordinates, elevation and IANA timezone. Geographic metadata is used as model features; it is not a weather observation.")
                 .put("Open-Meteo Elevation", "The 90 m global DEM endpoint is used only when geocoding does not return an elevation.")
                 .put("Visual Crossing", "Not queried by TempLearn 0.7.0; no Visual Crossing values are part of this model.")
-                .put("missing_BOM_temperature", "Keep the hour missing. Do not substitute a temperature from another provider."))
+                .put("missing_Open-Meteo Best Match_temperature", "Keep the hour missing. Do not substitute a temperature from another provider."))
             .put("algorithm", JSONObject()
                 .put("name", "multivariable_linear_ridge_regression")
-                .put("model_architecture", "single linear output with 53 ordered engineered features")
+                .put("model_architecture", "single linear output with 62 ordered engineered features")
                 .put("inference", "clamp(20 + 10 * dot(weights, feature_vector), -90, 70)")
                 .put("training_epochs", 250)
                 .put("learning_rate", 0.012)
@@ -154,14 +163,14 @@ object WeatherModelExport {
             .put("inference_contract", JSONObject()
                 .put("target_timestamp", "Unix seconds for the local hour being predicted; convert using the target location's IANA timezone.")
                 .put("previous_temperatures_c", JSONArray()
-                    .put("latest completed BOM hour t1")
+                    .put("latest completed Open-Meteo Best Match hour t1")
                     .put("one completed hour before t1 t2")
                     .put("two completed hours before t1 t3"))
                 .put("geographic_inputs", "Latitude and longitude in WGS84 degrees plus elevation above mean sea level in metres. Shared models require target-location coordinates and timezone at inference. Location models default to the exported location metadata.")
-                .put("weather_inputs", "Historical weather values from the latest completed BOM observation hour t1. All fields must come from that BOM station observation; missing fields stay missing. Open-Meteo daily context is not an input to this trained model.")
-                .put("required_temperature_history", "Three consecutive hourly BOM observations. Do not interpolate missing BOM temperatures.")
-                .put("air_temperature_source_policy", "BOM is the sole source of air-temperature targets and previous-temperature inputs. Never substitute Open-Meteo, Visual Crossing, or another modelled temperature.")
-                .put("other_weather_source_policy", "BOM is the only source for historical weather predictors used in training and inference. Never fill a missing historical BOM field with Open-Meteo data.")
+                .put("weather_inputs", "Historical weather values from the latest completed Open-Meteo Best Match observation hour t1. All fields must come from that Open-Meteo Best Match station observation; missing fields stay missing. Open-Meteo daily context is not an input to this trained model.")
+                .put("required_temperature_history", "Three consecutive hourly Open-Meteo Best Match observations. Do not interpolate missing Open-Meteo Best Match temperatures.")
+                .put("air_temperature_source_policy", "Open-Meteo Best Match is the sole source of air-temperature targets and previous-temperature inputs. Never substitute Open-Meteo, Visual Crossing, or another modelled temperature.")
+                .put("other_weather_source_policy", "Open-Meteo Best Match is the only source for historical weather predictors used in training and inference. Never fill a missing historical Open-Meteo Best Match field with Open-Meteo data.")
                 .put("missing_weather_values", "After centring and scaling, missing numeric weather features are set to 0.0. Missing wind direction produces sin=0 and cos=0. Unknown elevation uses normalized zero plus elevation_present=0."))
             .put("timezone_policy", if (modelScope == "shared") {
                 "Pass the target location's IANA timezone at inference; training used each contributing location's own timezone. The exported timezone is the active app location's default only."
@@ -200,14 +209,14 @@ object WeatherModelExport {
             .put("features", modelJson.getJSONArray("feature_schema"))
         val packageReadme = """# ${modelJson.getString("model_name")}
 
-TempLearn portable model package, format v2. This archive contains the complete learned inference state and executable reference implementation; it does not require the TempLearn Android app, its SQLite database, API keys, or network access for inference.
+TempLearn portable model package, format v3. This archive contains the complete learned inference state and executable reference implementation; it does not require the TempLearn Android app, its SQLite database, API keys, or network access for inference.
 
 ## Contents
 
 - `model.json` — architecture description, all ${features.size} ordered feature definitions, learned coefficients, preprocessing rules, source policy, training coverage, saved location profiles, and validation metrics. `training.contributing_location_count` is the number of locations actually used for fitting.
 - `feature_schema.json` — machine-readable ordered feature schema.
 - `inference.py` — standard-library Python inference implementation with a command-line interface.
-- `trainer.py` — standard-library reference ridge-regression trainer for new BOM JSONL datasets.
+- `trainer.py` — standard-library reference ridge-regression trainer for new Open-Meteo Best Match JSONL datasets.
 - `inference_contract.json` — required input and provenance contract.
 - `training_metadata.json` and `evaluation.json` — learning coverage, local profile metadata and held-out evaluation.
 - `MODEL_CARD.md` — human-readable model card, intended use and limitations.
@@ -229,9 +238,9 @@ A single-output multivariable linear ridge-regression model. The learned state i
 
 ## Training data and source boundaries
 
-Historical hourly targets and historical weather inputs are BOM-only. Missing BOM temperatures are never filled by another provider; missing historical BOM predictor fields remain missing. Open-Meteo daily aggregates are stored separately and are not model features. Open-Meteo Geocoding/Elevation supply location metadata only.
+Historical hourly targets and historical weather inputs are Open-Meteo Best Match-only. Missing Open-Meteo Best Match temperatures are never filled by another provider; missing historical Open-Meteo Best Match predictor fields remain missing. Open-Meteo daily aggregates are stored separately and are not model features. Open-Meteo Geocoding/Elevation supply location metadata only.
 
-The ZIP deliberately excludes raw hourly records and API credentials. Stored location profiles are included as geographic metadata; some profiles may not have had enough consecutive BOM samples to contribute to this particular fit. `training.contributing_location_count` records the actual contributing count. The shared model combines only this installation's saved, geocoded locations; it does not pool data from other users or a remote server.
+The ZIP deliberately excludes raw hourly records and API credentials. Stored location profiles are included as geographic metadata; some profiles may not have had enough consecutive Open-Meteo Best Match samples to contribute to this particular fit. `training.contributing_location_count` records the actual contributing count. The shared model combines only this installation's saved, geocoded locations; it does not pool data from other users or a remote server.
 
 ## Evaluation caveat
 
@@ -271,7 +280,7 @@ Experimental short-horizon temperature estimation and algorithm research. It is 
 
 ## Inputs
 
-Three consecutive previous hourly BOM temperatures, BOM weather values for the latest completed hour, target timestamp, local IANA timezone, latitude, longitude and optional elevation.
+Three consecutive previous hourly Open-Meteo Best Match temperatures, Open-Meteo Best Match weather values for the latest completed hour, target timestamp, local IANA timezone, latitude, longitude and optional elevation.
 
 ## Limitations
 
@@ -279,7 +288,7 @@ A linear ridge model cannot represent every nonlinear atmospheric process. The o
 
 ## Data provenance
 
-BOM is the only historical observation provider. Open-Meteo daily context is not a model input. Open-Meteo Geocoding provides geographic metadata. See `model.json` for the machine-readable source policy.
+Open-Meteo Best Match is the only historical observation provider. Open-Meteo daily context is not a model input. Open-Meteo Geocoding provides geographic metadata. See `model.json` for the machine-readable source policy.
 
 ## Example request
 
@@ -288,7 +297,7 @@ BOM is the only historical observation provider. Open-Meteo daily context is not
   "target_timestamp_unix_seconds": 1800003600,
   "timezone": "Australia/Sydney",
   "location": {"latitude": -33.7198, "longitude": 150.3074, "elevation_m": 1000},
-  "previous_bom_hours": [
+  "previous_open_meteo_hours": [
     {"timestamp_unix_seconds": 1800000000, "temperature_c": 21.8},
     {"timestamp_unix_seconds": 1799996400, "temperature_c": 21.2},
     {"timestamp_unix_seconds": 1799992800, "temperature_c": 20.7}
@@ -297,7 +306,7 @@ BOM is the only historical observation provider. Open-Meteo daily context is not
 }
 ```
 
-Missing weather fields may be omitted. Do not substitute non-BOM historical weather values.
+Missing weather fields may be omitted. Do not substitute non-Open-Meteo Best Match historical weather values.
 """
         val requirements = "Python>=3.10\n# Inference and reference trainer use the Python standard library only.\n"
         val output = ByteArrayOutputStream()

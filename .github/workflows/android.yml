@@ -3,12 +3,12 @@ name: Build TempLearn Android APK
 on:
   workflow_dispatch:
   push:
-    branches: [main, master]
+    branches: [main, master, templearn-openmeteo-v0.8.0]
   pull_request:
-    branches: [main, master]
+    branches: [main, master, templearn-openmeteo-v0.8.0]
 
 permissions:
-  contents: read
+  contents: write
 
 concurrency:
   group: templearn-android-${{ github.ref }}
@@ -22,6 +22,25 @@ jobs:
       - name: Check out source
         uses: actions/checkout@v7
 
+      - name: Run model and source-policy regression tests
+        run: python3 -m unittest discover -s model-format -p 'test_*.py'
+
+      - name: Package workflow-compatible source project
+        shell: bash
+        run: |
+          set -euo pipefail
+          find . -type d -name __pycache__ -prune -exec rm -rf {} +
+          zip -qr "$RUNNER_TEMP/TempLearn-source.zip" . \
+            -x '.git/*' '**/.gradle/*' '**/build/*' 'app/build/*' '.idea/*' '**/__pycache__/*' '**/*.pyc'
+
+      - name: Upload source project ZIP
+        uses: actions/upload-artifact@v7
+        with:
+          name: TempLearn-source-project
+          path: ${{ runner.temp }}/TempLearn-source.zip
+          if-no-files-found: error
+          retention-days: 14
+
       - name: Set up Java 17
         uses: actions/setup-java@v6
         with:
@@ -34,8 +53,11 @@ jobs:
           gradle-version: '8.9'
           validate-wrappers: false
 
+      - name: Run Android unit tests
+        run: gradle --no-daemon testDebugUnitTest
+
       - name: Restore release signing keystore
-        if: github.event_name != 'pull_request'
+        if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
         shell: bash
         env:
           ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
@@ -59,7 +81,7 @@ jobs:
           echo "Release keystore and alias verified."
 
       - name: Build signed release APK
-        if: github.event_name != 'pull_request'
+        if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
         env:
           ANDROID_KEYSTORE_FILE: ${{ runner.temp }}/templearn-release.jks
           ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
@@ -67,12 +89,44 @@ jobs:
           ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
         run: gradle --no-daemon assembleRelease
 
-      - name: Build debug APK for pull request checks
-        if: github.event_name == 'pull_request'
+      - name: Verify signed release APK
+        if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+        shell: bash
+        run: |
+          set -euo pipefail
+          sdk_root="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-}}"
+          : "${sdk_root:?Android SDK path is unavailable}"
+          apksigner="$(find "$sdk_root/build-tools" -mindepth 2 -maxdepth 2 -type f -name apksigner | sort -V | tail -n 1)"
+          : "${apksigner:?Android SDK apksigner was not found}"
+          "$apksigner" verify --verbose --print-certs app/build/outputs/apk/release/app-release.apk
+
+      - name: Publish direct signed APK release asset
+        if: github.event_name == 'push' && github.ref == 'refs/heads/templearn-openmeteo-v0.8.0'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          version_name="$(awk -F'"' '/versionName[[:space:]]*=/ {print $2; exit}' app/build.gradle.kts)"
+          : "${version_name:?Could not read app versionName}"
+          tag="v${version_name}"
+          apk_name="TempLearn-${version_name}.apk"
+          cp app/build/outputs/apk/release/app-release.apk "$apk_name"
+          if gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload "$tag" "$apk_name" --repo "$GITHUB_REPOSITORY" --clobber
+          else
+            gh release create "$tag" "$apk_name" \
+              --repo "$GITHUB_REPOSITORY" \
+              --title "TempLearn ${version_name}" \
+              --notes "Signed Android APK for TempLearn ${version_name}."
+          fi
+
+      - name: Build debug APK for fork pull request checks (secrets are unavailable)
+        if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository
         run: gradle --no-daemon assembleDebug
 
       - name: Upload signed release APK
-        if: github.event_name != 'pull_request'
+        if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
         uses: actions/upload-artifact@v7
         with:
           name: TempLearn-release-apk
@@ -80,8 +134,8 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
-      - name: Upload debug APK for pull request checks
-        if: github.event_name == 'pull_request'
+      - name: Upload debug APK for fork pull request checks
+        if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository
         uses: actions/upload-artifact@v7
         with:
           name: TempLearn-debug-apk

@@ -26,11 +26,6 @@ import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
 import android.widget.Toast
-import androidx.work.Constraints
-import androidx.work.ExistingPeriodicWorkPolicy
-import androidx.work.NetworkType
-import androidx.work.PeriodicWorkRequestBuilder
-import androidx.work.WorkManager
 import java.time.Instant
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
@@ -79,13 +74,53 @@ class MainActivity : Activity() {
         window.navigationBarColor = backgroundColor
         window.decorView.systemUiVisibility = View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR
 
-        if (!prefs.contains(AppPreferences.KEY_LOCATION)) {
-            prefs.edit().putString(AppPreferences.KEY_LOCATION, AppPreferences.DEFAULT_LOCATION).apply()
+        val previouslySavedLocation = prefs.getString(AppPreferences.KEY_LOCATION, null)
+        val preferenceMigration = prefs.edit()
+        if (previouslySavedLocation == null) {
+            preferenceMigration.putString(AppPreferences.KEY_LOCATION, AppPreferences.DEFAULT_LOCATION)
+        } else if (previouslySavedLocation.equals("2780, NSW, Australia", ignoreCase = true)) {
+            // Preserve the active dataset key while renaming the default place from postcode to Katoomba.
+            preferenceMigration.putString(AppPreferences.KEY_LOCATION, AppPreferences.DEFAULT_LOCATION)
+        }
+        preferenceMigration.apply()
+        val startupLocation = prefs.getString(AppPreferences.KEY_LOCATION, AppPreferences.DEFAULT_LOCATION)
+            ?: AppPreferences.DEFAULT_LOCATION
+        val startupLocationKey = AppPreferences.activeLocationKey(prefs, startupLocation)
+        if (startupLocation.equals(AppPreferences.DEFAULT_LOCATION, ignoreCase = true) &&
+            !prefs.contains(AppPreferences.weatherPointModeKey(startupLocationKey))
+        ) {
+            prefs.edit()
+                .putString(AppPreferences.weatherPointModeKey(startupLocationKey), AppPreferences.WEATHER_POINT_MANUAL)
+                .putString(AppPreferences.weatherPointNameKey(startupLocationKey), AppPreferences.DEFAULT_WEATHER_POINT_NAME)
+                .apply()
+        }
+        val migrationDb = TemperatureDatabase(this)
+        try {
+            val savedProfile = migrationDb.getLocationProfile(startupLocationKey)
+            if (startupLocation.equals(AppPreferences.DEFAULT_LOCATION, ignoreCase = true) &&
+                savedProfile?.name.equals("2780", ignoreCase = true)
+            ) {
+                savedProfile?.let {
+                    migrationDb.saveLocationProfile(
+                        it.copy(
+                            searchQuery = AppPreferences.DEFAULT_LOCATION,
+                            name = "Katoomba",
+                            admin1 = "New South Wales",
+                            admin2 = null,
+                            country = "Australia",
+                            countryCode = "AU",
+                            postcodes = listOf("2780")
+                        )
+                    )
+                }
+            }
+        } finally {
+            migrationDb.close()
         }
         NotificationHelper.createChannel(this)
         buildInterface()
         uiBuilt = true
-        scheduleDailySync()
+        DailySyncScheduler.ensureScheduled(applicationContext)
         refreshDashboard()
         requestNotificationPermissionIfNeeded()
         if (shouldAutoSync()) syncNow(manual = false)
@@ -232,7 +267,7 @@ class MainActivity : Activity() {
         historyRows = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         historyCard.addView(historyRows, LinearLayout.LayoutParams(-1, -2))
 
-        val attribution = "Historical observations and all historical training predictors: BOM station only. Missing BOM fields remain missing; no other provider fills historical readings. Open-Meteo supplies previous-completed-day non-temperature daily context only (past_days=1, forecast_days=0), stored separately and never merged into BOM training history. Open-Meteo Geocoding and Elevation supply location metadata only. Weather data by Open-Meteo.com (CC BY 4.0). BOM's anonymous feeds are for personal, non-commercial use. Validation uses later unseen hours and is not a guarantee of forecast accuracy."
+        val attribution = "Historical hourly temperature targets and predictors: Open-Meteo Historical Weather API, Best Match reanalysis. The default location's complete published JSON archive is downloaded once, imported into local storage, used for historical training, and then deleted to reclaim space. Other locations use a matching Open-Meteo archive download; later syncs update the latest available date. Missing values remain missing. Weather data by Open-Meteo.com (CC BY 4.0). Reanalysis is modelled historical weather, not a local station observation. Validation uses later unseen hours and is not a guarantee of forecast accuracy. The feedback correction compares completed predictions with later matching Open-Meteo Best Match hourly values; these are not independent station observations."
         addText(content, attribution, 11f, mutedColor, false).apply {
             val attributedText = android.text.SpannableString(attribution)
             val providerStart = attribution.indexOf("Open-Meteo.com")
@@ -284,7 +319,7 @@ class MainActivity : Activity() {
         }
         addText(
             content,
-            "Search for a postcode, town or address, then choose the matching place. TempLearn saves its coordinates, elevation and timezone and keeps each location's BOM history and local model separate.",
+            "Search for a town or postcode, then choose how Open-Meteo should place the weather data point: Automatic uses that place; Manual lets you choose a separate nearby location such as Mount Boyce. Both modes use Open-Meteo Best Match data.",
             14f,
             mutedColor,
             false
@@ -301,7 +336,7 @@ class MainActivity : Activity() {
         locationCard.addView(locationInput, LinearLayout.LayoutParams(-1, dp(50)).apply { topMargin = dp(9) })
         addText(
             locationCard,
-            "Examples: 2780, NSW, Australia · Katoomba, NSW, Australia · Perth, WA, Australia. Geocoding supplies the canonical coordinates, elevation and timezone. BOM supplies hourly training observations; Open-Meteo's daily aggregates remain separate.",
+            "Examples: Katoomba, NSW, Australia · Blackheath, NSW, Australia · Perth, WA, Australia. After choosing the place, select Automatic or search for a separate Manual weather location (for example, Mount Boyce). The provider remains Open-Meteo.",
             12f,
             mutedColor,
             false
@@ -332,7 +367,7 @@ class MainActivity : Activity() {
         addText(modelCard, "PORTABLE MACHINE-LEARNING MODEL", 11f, mutedColor, true)
         addText(
             modelCard,
-            "Export a complete, portable model package: learned parameters, 53-feature schema, preprocessing, ridge-regression algorithm, inference contract, Python inference and training code, evaluation metrics, training coverage and geographic metadata. It opens independently of TempLearn and contains no API keys or raw hourly history.",
+            "Export a complete, portable model package: learned parameters, 62-feature schema, preprocessing, ridge-regression algorithm, inference contract, Python inference and training code, evaluation metrics, training coverage and geographic metadata. It opens independently of TempLearn and contains no API keys or raw hourly history.",
             12f,
             mutedColor,
             false
@@ -450,17 +485,28 @@ class MainActivity : Activity() {
         val db = TemperatureDatabase(this)
         try {
             val profile = db.getLocationProfile(locationKey)
-            locationSummaryText.text = profile?.displayName ?: location
+            val selectedMode = prefs.getString(
+                AppPreferences.weatherPointModeKey(locationKey),
+                if (location.equals(AppPreferences.DEFAULT_LOCATION, ignoreCase = true)) AppPreferences.WEATHER_POINT_MANUAL
+                else AppPreferences.WEATHER_POINT_AUTOMATIC
+            ) ?: AppPreferences.WEATHER_POINT_AUTOMATIC
+            val selectedPoint = prefs.getString(
+                AppPreferences.weatherPointNameKey(locationKey),
+                if (location.equals(AppPreferences.DEFAULT_LOCATION, ignoreCase = true)) AppPreferences.DEFAULT_WEATHER_POINT_NAME
+                else profile?.displayName
+            ) ?: profile?.displayName ?: location
+            val modeLabel = if (selectedMode == AppPreferences.WEATHER_POINT_MANUAL) "Manual" else "Automatic"
+            locationSummaryText.text = "${profile?.displayName ?: location}\nWeather data: $selectedPoint · $modeLabel"
             val zoneId = profile?.timezoneId ?: (prefs.getString(
                 AppPreferences.timezoneKey(locationKey),
                 ZoneId.systemDefault().id
             ) ?: ZoneId.systemDefault().id)
-            val all = db.getAllReadings(locationKey)
+            val all = db.getLatestReadings(locationKey, 72)
             val recent = all.takeLast(24)
             val model = db.getModel(locationKey)
             val sharedModel = db.getModel(AppPreferences.SHARED_MODEL_KEY)
             chartView.setReadings(recent)
-            storedCountText.text = all.size.toString()
+            storedCountText.text = db.getSavedCount(locationKey).toString()
             trainingCountText.text = model?.trainingExamples?.toString() ?: "0"
             val effectiveModelForMetrics = model ?: sharedModel?.takeIf { profile != null }
             if (effectiveModelForMetrics != null && effectiveModelForMetrics.validationExamples > 0 && effectiveModelForMetrics.validationMaeC.isFinite()) {
@@ -493,21 +539,45 @@ class MainActivity : Activity() {
             }
 
             // A newly selected place can borrow the shared geographical model immediately;
-            // once enough local BOM history exists, its locally adapted model takes precedence.
+            // once enough local hourly history exists, its locally adapted model takes precedence.
             val predictionModel = model ?: sharedModel?.takeIf { profile != null }
             val predicted = predictionModel?.let {
-                WeatherLearner.predictNext(all, it, zoneId, profile?.modelContext() ?: ModelLocationContext())
+                predictAndStoreNextHour(
+                    database = db,
+                    locationKey = locationKey,
+                    readings = all,
+                    model = it,
+                    timezoneId = zoneId,
+                    locationContext = profile?.modelContext() ?: ModelLocationContext()
+                )
             }
             if (predicted != null) {
-                predictionText.text = String.format(Locale.getDefault(), "%.1f °C", predicted.second)
+                predictionText.text = String.format(Locale.getDefault(), "%.1f °C", predicted.temperatureC)
                 val formatter = DateTimeFormatter.ofPattern("EEE, d MMM · h:mm a", Locale.US)
-                val localTime = Instant.ofEpochSecond(predicted.first).atZone(ZoneId.of(zoneId))
+                val localTime = Instant.ofEpochSecond(predicted.targetTimestampSec).atZone(ZoneId.of(zoneId))
                 val modelDescription = if (model != null) "Location-adapted estimate" else "Shared-model estimate · adapting to this location"
-                predictionSubtext.text = "$modelDescription · ${formatter.format(localTime)} local time"
+                val replayChecks = db.getVerifiedPredictionCount(
+                    locationKey,
+                    PredictionVerificationMethod.WALK_FORWARD_REPLAY
+                )
+                val liveVerified = db.getVerifiedPredictionCount(
+                    locationKey,
+                    PredictionVerificationMethod.LIVE
+                )
+                val pendingPredictions = db.getPendingPredictionCount(locationKey)
+                val feedbackDescription = String.format(
+                    Locale.getDefault(),
+                    "%d walk-forward backtest checks · %d live forecasts verified · correction %+.1f°C · %d pending",
+                    replayChecks,
+                    liveVerified,
+                    predicted.correctionC,
+                    pendingPredictions
+                )
+                predictionSubtext.text = "$modelDescription · ${formatter.format(localTime)} local time · $feedbackDescription"
             } else {
                 predictionText.text = "— °C"
                 predictionSubtext.text = if (all.size < 4) {
-                    "Fetch hourly weather to begin learning for this postcode."
+                    "The historical archive will be imported and pre-trained automatically on first launch."
                 } else {
                     "Three consecutive hours are needed to estimate the next point."
                 }
@@ -588,7 +658,7 @@ class MainActivity : Activity() {
         reading.et0Mm?.let { parts += String.format(Locale.getDefault(), "ET₀ %.2f mm", it) }
         reading.uvIndex?.let { parts += String.format(Locale.getDefault(), "UV %.1f", it) }
         reading.weatherCode?.let { parts += "WMO $it" }
-        parts += "Air temperature: BOM"
+        parts += "Air temperature: Open-Meteo Best Match"
         return parts.joinToString(" · ")
     }
 
@@ -603,7 +673,13 @@ class MainActivity : Activity() {
         syncInProgress = true
         syncButton.isEnabled = false
         syncButton.alpha = 0.7f
-        statusText.text = "Fetching BOM observations and previous-day Open-Meteo daily context…"
+        val locationKey = AppPreferences.activeLocationKey(prefs, location)
+        val initialImportNeeded = !prefs.getBoolean(AppPreferences.historyCompleteKey(locationKey), false)
+        statusText.text = if (initialImportNeeded) {
+            "Downloading the complete Open-Meteo historical archive, importing it, and training from it before the recent hourly refresh…"
+        } else {
+            "Refreshing recent Open-Meteo hours and updating the local model…"
+        }
         executor.execute {
             try {
                 val result = SyncRepository.sync(this, location)
@@ -611,13 +687,11 @@ class MainActivity : Activity() {
                     syncInProgress = false
                     syncButton.isEnabled = true
                     syncButton.alpha = 1f
-                    val windowText = "BOM's latest approximately 72-hour observation window"
-                    val bomText = if (result.bomAppliedHours > 0) {
-                        "BOM-only history: ${result.bomAppliedHours} hourly observations from ${result.bomStationName ?: "nearby station"} (${String.format(Locale.getDefault(), "%.0f", result.bomDistanceKm ?: 0.0)} km)"
-                    } else "No new BOM observations; no other provider was substituted"
-                    val dailyContextText = if (result.openMeteoAvailable) {
-                        "Open-Meteo previous-day daily context: ${result.openMeteoDailyDays} completed daily record(s); no forecasts or temperature values imported"
-                    } else "Open-Meteo previous-day daily context unavailable; BOM history remains independent"
+                    val importText = if (result.initialImportCompletedNow) {
+                        "Initial 2000-present historical archive imported and used for model training"
+                    } else {
+                        "Recent Open-Meteo Forecast API hourly refresh completed"
+                    }
                     val geoText = String.format(
                         Locale.getDefault(),
                         "%.4f°, %.4f° · %s m elevation",
@@ -626,8 +700,13 @@ class MainActivity : Activity() {
                         result.locationProfile.elevationM?.let { String.format(Locale.getDefault(), "%.0f", it) } ?: "unknown"
                     )
                     locationSummaryText.text = result.resolvedAddress
-                    statusText.text = "${result.resolvedAddress} ($geoText): $windowText · $bomText · $dailyContextText · ${result.trainingExamples} local examples · ${result.savedReadings} BOM hours saved."
-                    NotificationHelper.showSyncSuccess(this, result, source = if (manual) "manual" else "automatic")
+                    val refreshWarning = result.recentUpdateWarning?.let {
+                        " Yesterday-and-today refresh failed; historical learning is retained and the app will retry: $it"
+                    }.orEmpty()
+                    statusText.text = "${result.resolvedAddress} ($geoText): $importText · ${result.fetchedHours} new hourly rows (overlapping timestamps skipped) · ${result.trainingExamples} local training examples · ${result.savedReadings} stored hourly records.$refreshWarning"
+                    if (result.recentUpdateWarning == null) {
+                        NotificationHelper.showSyncSuccess(this, result, source = if (manual) "manual" else "automatic")
+                    }
                     refreshDashboard()
                 }
             } catch (error: Exception) {
@@ -664,9 +743,9 @@ class MainActivity : Activity() {
                     }
                     val labels = matches.map { it.selectionLabel() }.toTypedArray()
                     AlertDialog.Builder(this)
-                        .setTitle("Choose the correct location")
+                        .setTitle("Choose the correct place")
                         .setItems(labels) { _, index ->
-                            saveSelectedLocation(query, matches[index], allowLegacyMigration = matches.size == 1)
+                            chooseWeatherPoint(query, matches[index])
                         }
                         .setNegativeButton("Cancel") { _, _ -> statusText.text = "Location not changed." }
                         .show()
@@ -680,25 +759,127 @@ class MainActivity : Activity() {
         }
     }
 
+    /** Choose the data coordinates independently of the named town/postcode. */
+    private fun chooseWeatherPoint(query: String, place: LocationGeocodingClient.Place) {
+        AlertDialog.Builder(this)
+            .setTitle("Choose Open-Meteo data location")
+            .setMessage(
+                "Automatic uses this place's coordinates and lets Open-Meteo Best Match select the model. Manual lets you choose a separate nearby weather location, such as Mount Boyce. Both modes use Open-Meteo."
+            )
+            .setPositiveButton("Automatic") { _, _ ->
+                saveSelectedLocation(query, place, place, AppPreferences.WEATHER_POINT_AUTOMATIC)
+            }
+            .setNeutralButton("Manual…") { _, _ ->
+                promptManualWeatherLocation(query, place)
+            }
+            .setNegativeButton("Cancel") { _, _ -> statusText.text = "Location not changed." }
+            .show()
+    }
+
+    private fun promptManualWeatherLocation(
+        query: String,
+        place: LocationGeocodingClient.Place
+    ) {
+        val defaultStationQuery = if (query.equals(AppPreferences.DEFAULT_LOCATION, ignoreCase = true)) {
+            "Mount Boyce, NSW, Australia"
+        } else {
+            ""
+        }
+        val stationInput = EditText(this).apply {
+            hint = "Weather location, e.g. Mount Boyce, NSW"
+            setText(defaultStationQuery)
+            setSingleLine(true)
+            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_CAP_SENTENCES
+            setPadding(dp(12), dp(9), dp(12), dp(9))
+        }
+        AlertDialog.Builder(this)
+            .setTitle("Choose manual weather location")
+            .setMessage("Search Open-Meteo locations for the point you want the weather data to represent.")
+            .setView(stationInput)
+            .setPositiveButton("Search") { _, _ ->
+                val stationQuery = stationInput.text.toString().trim()
+                if (stationQuery.length < 2) {
+                    Toast.makeText(this, "Enter a weather location.", Toast.LENGTH_SHORT).show()
+                } else {
+                    searchAndSelectManualWeatherLocation(query, place, stationQuery)
+                }
+            }
+            .setNegativeButton("Back") { _, _ -> chooseWeatherPoint(query, place) }
+            .show()
+    }
+
+    private fun searchAndSelectManualWeatherLocation(
+        query: String,
+        place: LocationGeocodingClient.Place,
+        weatherQuery: String
+    ) {
+        statusText.text = "Searching for manual weather locations…"
+        executor.execute {
+            try {
+                val matches = LocationGeocodingClient.search(weatherQuery)
+                runOnUiThread {
+                    if (matches.isEmpty()) {
+                        statusText.text = "No matching manual weather location found."
+                        AlertDialog.Builder(this)
+                            .setTitle("No weather location found")
+                            .setMessage("Open-Meteo could not find that place. Try a nearby town, named locality, or postcode.")
+                            .setPositiveButton("Try again") { _, _ ->
+                                promptManualWeatherLocation(query, place)
+                            }
+                            .setNegativeButton("Cancel", null)
+                            .show()
+                        return@runOnUiThread
+                    }
+                    val labels = matches.map { it.selectionLabel() }.toTypedArray()
+                    AlertDialog.Builder(this)
+                        .setTitle("Choose the manual weather location")
+                        .setItems(labels) { _, index ->
+                            saveSelectedLocation(query, place, matches[index], AppPreferences.WEATHER_POINT_MANUAL)
+                        }
+                        .setNegativeButton("Cancel") { _, _ -> statusText.text = "Location not changed." }
+                        .show()
+                }
+            } catch (error: Exception) {
+                runOnUiThread {
+                    statusText.text = "Manual location search failed: ${error.message ?: "check your connection"}"
+                    Toast.makeText(this, statusText.text, Toast.LENGTH_LONG).show()
+                }
+            }
+        }
+    }
+
     private fun saveSelectedLocation(
         query: String,
         place: LocationGeocodingClient.Place,
-        allowLegacyMigration: Boolean
+        weatherPlace: LocationGeocodingClient.Place,
+        weatherPointMode: String
     ) {
         statusText.text = "Saving ${place.displayName}…"
         executor.execute {
             try {
-                val elevation = place.elevationM ?: runCatching {
-                    OpenMeteoClient.fetchElevation(place.latitude, place.longitude)
+                val elevation = weatherPlace.elevationM ?: runCatching {
+                    OpenMeteoClient.fetchElevation(weatherPlace.latitude, weatherPlace.longitude)
                 }.getOrNull()
-                val legacyKey = AppPreferences.locationKey(query)
-                val locationKey = AppPreferences.geocodedLocationKey(place.id)
-                val profile = place.toProfile(locationKey, query, elevation)
+                val locationKey: String
+                val profile: LocationProfile
                 val database = TemperatureDatabase(this)
                 try {
-                    if (allowLegacyMigration) {
-                        database.moveLocationKey(legacyKey, locationKey, place.id)
+                    val reusableProfile = database.getAllLocationProfiles().values.firstOrNull { candidate ->
+                        val samePoint =
+                            kotlin.math.abs(candidate.latitude - weatherPlace.latitude) <= 0.001 &&
+                            kotlin.math.abs(candidate.longitude - weatherPlace.longitude) <= 0.001
+                        val samePlace = candidate.geocodingId == place.id ||
+                            (query.equals(AppPreferences.DEFAULT_LOCATION, ignoreCase = true) && candidate.geocodingId == 0L)
+                        samePoint && samePlace
                     }
+                    locationKey = reusableProfile?.locationKey
+                        ?: AppPreferences.weatherDataLocationKey(place.id, weatherPlace.latitude, weatherPlace.longitude)
+                    profile = place.toProfile(locationKey, query, elevation).copy(
+                        latitude = weatherPlace.latitude,
+                        longitude = weatherPlace.longitude,
+                        elevationM = elevation,
+                        timezoneId = weatherPlace.timezoneId
+                    )
                     database.saveLocationProfile(profile)
                 } finally {
                     database.close()
@@ -706,9 +887,16 @@ class MainActivity : Activity() {
                 prefs.edit()
                     .putString(AppPreferences.KEY_LOCATION, query)
                     .putString(AppPreferences.KEY_ACTIVE_LOCATION_KEY, locationKey)
+                    .putString(AppPreferences.timezoneKey(locationKey), profile.timezoneId)
+                    .putString(AppPreferences.resolvedAddressKey(locationKey), profile.displayName)
+                    .putString(AppPreferences.latitudeKey(locationKey), profile.latitude.toString())
+                    .putString(AppPreferences.longitudeKey(locationKey), profile.longitude.toString())
+                    .putString(AppPreferences.elevationKey(locationKey), profile.elevationM?.toString())
+                    .putString(AppPreferences.weatherPointModeKey(locationKey), weatherPointMode)
+                    .putString(AppPreferences.weatherPointNameKey(locationKey), weatherPlace.displayName)
                     .apply()
+                DailySyncScheduler.rescheduleForLocation(applicationContext)
                 runOnUiThread {
-                    locationSummaryText.text = profile.displayName
                     showSettings(false)
                     refreshDashboard()
                     syncNow(manual = true)
@@ -756,7 +944,7 @@ class MainActivity : Activity() {
             val safeName = (profile?.name ?: location).lowercase(Locale.ROOT)
                 .replace(Regex("[^a-z0-9]+"), "_").trim('_').take(36).ifBlank { "location" }
             pendingModelExportZip = zipBytes
-            pendingModelExportFilename = if (shared) "templearn_shared_model_v2.zip" else "templearn_${safeName}_model_v2.zip"
+            pendingModelExportFilename = if (shared) "templearn_shared_model_v3.zip" else "templearn_${safeName}_model_v3.zip"
             val intent = Intent(Intent.ACTION_CREATE_DOCUMENT).apply {
                 addCategory(Intent.CATEGORY_OPENABLE)
                 type = "application/zip"
@@ -775,7 +963,7 @@ class MainActivity : Activity() {
         if (requestCode != REQUEST_EXPORT_MODEL) return
         val zipBytes = pendingModelExportZip
         pendingModelExportZip = null
-        val filename = pendingModelExportFilename ?: "templearn_model_v2.zip"
+        val filename = pendingModelExportFilename ?: "templearn_model_v3.zip"
         pendingModelExportFilename = null
         val uri = data?.data
         if (resultCode != RESULT_OK || uri == null || zipBytes == null) return
@@ -810,6 +998,7 @@ class MainActivity : Activity() {
         val location = prefs.getString(AppPreferences.KEY_LOCATION, AppPreferences.DEFAULT_LOCATION)
             ?.takeIf { it.isNotBlank() } ?: return true
         val key = AppPreferences.activeLocationKey(prefs, location)
+        if (!prefs.getBoolean(AppPreferences.historyCompleteKey(key), false)) return true
         val lastSync = prefs.getLong(AppPreferences.syncTimeKey(key), 0L)
         if (lastSync == 0L || Instant.now().epochSecond - lastSync > 6L * 60L * 60L) return true
         val db = TemperatureDatabase(this)
@@ -823,19 +1012,7 @@ class MainActivity : Activity() {
         }
     }
 
-    private fun scheduleDailySync() {
-        val constraints = Constraints.Builder()
-            .setRequiredNetworkType(NetworkType.CONNECTED)
-            .build()
-        val request = PeriodicWorkRequestBuilder<DailySyncWorker>(24, java.util.concurrent.TimeUnit.HOURS)
-            .setConstraints(constraints)
-            .build()
-        WorkManager.getInstance(applicationContext).enqueueUniquePeriodicWork(
-            "templearn_daily_temperature_sync",
-            ExistingPeriodicWorkPolicy.KEEP,
-            request
-        )
-    }
+    private fun scheduleDailySync() = DailySyncScheduler.ensureScheduled(applicationContext)
 
     private fun newCard(color: Int = Color.WHITE): LinearLayout = LinearLayout(this).apply {
         orientation = LinearLayout.VERTICAL

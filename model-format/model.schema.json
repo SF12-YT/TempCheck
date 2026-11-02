@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "urn:templearn:weather-model:v1",
-  "title": "TempLearn portable weather model v1",
+  "$id": "urn:templearn:weather-model:v3",
+  "title": "TempLearn portable weather model v3",
   "type": "object",
   "required": [
     "format",
@@ -20,62 +20,130 @@
     "coefficients"
   ],
   "properties": {
-    "format": { "const": "templearn-weather-model" },
-    "format_version": { "const": 1 },
-    "exported_at_unix_seconds": { "type": "integer" },
-    "model_scope": { "enum": ["location", "shared"] },
-    "location_label": { "type": "string" },
-    "timezone": { "type": "string" },
+    "format": {
+      "const": "templearn-weather-model"
+    },
+    "format_version": {
+      "const": 3
+    },
+    "exported_at_unix_seconds": {
+      "type": "integer"
+    },
+    "model_scope": {
+      "enum": [
+        "location",
+        "shared"
+      ]
+    },
+    "location_label": {
+      "type": "string"
+    },
+    "timezone": {
+      "type": "string"
+    },
     "temperature_target": {
       "type": "object",
-      "required": ["name", "unit", "sole_observation_source"],
+      "required": [
+        "name",
+        "unit",
+        "sole_observation_source"
+      ],
       "properties": {
-        "name": { "const": "next_hour_air_temperature" },
-        "unit": { "const": "degrees_celsius" },
-        "sole_observation_source": { "const": "BOM" }
+        "name": {
+          "const": "next_hour_air_temperature"
+        },
+        "unit": {
+          "const": "degrees_celsius"
+        },
+        "sole_observation_source": {
+          "const": "OPEN_METEO_BEST_MATCH"
+        }
       },
       "additionalProperties": true
     },
-    "algorithm": { "type": "object" },
-    "training": { "type": "object" },
-    "output_transform": { "type": "object" },
-    "inference_contract": { "type": "object" },
-    "timezone_policy": { "type": "string" },
-    "reference_inference": { "type": "string" },
-    "feature_count": { "const": 46 },
+    "algorithm": {
+      "type": "object"
+    },
+    "training": {
+      "type": "object"
+    },
+    "output_transform": {
+      "type": "object"
+    },
+    "inference_contract": {
+      "type": "object"
+    },
+    "timezone_policy": {
+      "type": "string"
+    },
+    "reference_inference": {
+      "type": "string"
+    },
+    "feature_count": {
+      "const": 62
+    },
     "feature_schema": {
       "type": "array",
-      "minItems": 46,
-      "maxItems": 46,
+      "minItems": 62,
+      "maxItems": 62,
       "items": {
         "type": "object",
-        "required": ["index", "name", "expression", "description"],
+        "required": [
+          "index",
+          "name",
+          "expression",
+          "description"
+        ],
         "properties": {
-          "index": { "type": "integer", "minimum": 0, "maximum": 45 },
-          "name": { "type": "string" },
-          "expression": { "type": "string" },
-          "description": { "type": "string" }
+          "index": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 61
+          },
+          "name": {
+            "type": "string"
+          },
+          "expression": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          }
         },
         "additionalProperties": true
       }
     },
     "weights": {
       "type": "array",
-      "minItems": 46,
-      "maxItems": 46,
-      "items": { "type": "number" }
+      "minItems": 62,
+      "maxItems": 62,
+      "items": {
+        "type": "number"
+      }
     },
     "coefficients": {
       "type": "array",
-      "minItems": 46,
-      "maxItems": 46,
+      "minItems": 62,
+      "maxItems": 62,
       "items": {
         "type": "object",
-        "required": ["index", "feature", "weight"],
+        "required": [
+          "index",
+          "feature",
+          "weight"
+        ],
         "properties": {
-          "index": { "type": "integer", "minimum": 0, "maximum": 45 },
-          "feature": { "type": "string" },
-          "weight": { "type": "number" }
+          "index": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 61
+          },
+          "feature": {
+            "type": "string"
+          },
+          "weight": {
+            "type": "number"
+          }
         }
       }
     }

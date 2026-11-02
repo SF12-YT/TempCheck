@@ -1,4 +1,4 @@
-"""Reference inference for TempLearn's portable JSON model format v2.
+"""Reference inference for TempLearn's portable JSON model format v3.
 
 Standard-library only. See MODEL_FORMAT.md for the full input contract.
 """
@@ -13,7 +13,7 @@ from typing import Any, Mapping, Sequence
 from zoneinfo import ZoneInfo
 
 FORMAT_NAME = "templearn-weather-model"
-FORMAT_VERSION = 2
+FORMAT_VERSION = 3
 EXPECTED_FEATURES = [
     "bias", "local_hour_sin", "local_hour_cos", "day_of_year_sin", "day_of_year_cos",
     "temperature_t1", "temperature_t2", "temperature_t3", "dew_point", "wind_speed",
@@ -24,6 +24,9 @@ EXPECTED_FEATURES = [
     "vapour_pressure_deficit", "surface_pressure", "rain", "showers", "snowfall",
     "visibility", "evapotranspiration", "reference_et0", "uv_index", "uv_index_clear_sky",
     "wet_bulb_temperature", "apparent_temperature", "shortwave_radiation_instant",
+    "snow_depth", "direct_radiation", "diffuse_radiation", "boundary_layer_height",
+    "wind_speed_100m", "wind_direction_100m_sin", "wind_direction_100m_cos",
+    "soil_temperature_0_7cm", "soil_moisture_0_7cm",
     "weather_clear", "weather_partly_cloudy", "weather_fog", "weather_drizzle",
     "weather_rain", "weather_snow", "weather_rain_showers", "weather_thunderstorm",
     "latitude_normalized", "longitude_sin", "longitude_cos", "elevation_normalized",
@@ -54,20 +57,20 @@ def _clamp(value: float, low: float, high: float) -> float:
 
 def build_feature_vector(
     target_timestamp_unix_seconds: int,
-    previous_bom_hours: Sequence[Mapping[str, Any]],
+    previous_open_meteo_hours: Sequence[Mapping[str, Any]],
     weather: Mapping[str, Any] | None = None,
     timezone_id: str = "UTC",
     location: Mapping[str, Any] | None = None,
 ) -> list[float]:
-    """Build the exact 53-feature vector expected by a v2 model.
+    """Build the exact 53-feature vector expected by a v3 model.
 
-    Previous BOM records must be exactly three consecutive hourly observations, newest first.
+    Previous Open-Meteo Best Match records must be exactly three consecutive hourly observations, newest first.
     `location` must contain latitude and longitude; elevation_m is optional. Weather values must
-    all be from the newest completed BOM observation and must not be substituted from another API.
+    all be from the newest completed Open-Meteo Best Match observation and must not be substituted from another API.
     """
-    if len(previous_bom_hours) != 3:
-        raise ValueError("Exactly three consecutive previous BOM hourly observations are required.")
-    records = list(previous_bom_hours)
+    if len(previous_open_meteo_hours) != 3:
+        raise ValueError("Exactly three consecutive previous Open-Meteo Best Match hourly observations are required.")
+    records = list(previous_open_meteo_hours)
     timestamps: list[int] = []
     temperatures: list[float] = []
     for record in records:
@@ -75,17 +78,17 @@ def build_feature_vector(
             timestamp = int(record["timestamp_unix_seconds"])
             temperature = _number(record["temperature_c"])
         except (KeyError, TypeError, ValueError) as exc:
-            raise ValueError("Each BOM hour needs timestamp_unix_seconds and temperature_c.") from exc
+            raise ValueError("Each Open-Meteo Best Match hour needs timestamp_unix_seconds and temperature_c.") from exc
         if temperature is None:
-            raise ValueError("BOM temperature values must be finite numbers.")
+            raise ValueError("Open-Meteo Best Match temperature values must be finite numbers.")
         timestamps.append(timestamp)
         temperatures.append(temperature)
 
     target = int(target_timestamp_unix_seconds)
     if timestamps[0] != target - 3600:
-        raise ValueError("The newest BOM observation must be exactly one hour before the target.")
+        raise ValueError("The newest Open-Meteo Best Match observation must be exactly one hour before the target.")
     if timestamps[0] - timestamps[1] != 3600 or timestamps[1] - timestamps[2] != 3600:
-        raise ValueError("Previous BOM observations must be three consecutive hourly samples.")
+        raise ValueError("Previous Open-Meteo Best Match observations must be three consecutive hourly samples.")
 
     try:
         local_time = datetime.fromtimestamp(target, ZoneInfo(timezone_id))
@@ -97,9 +100,9 @@ def build_feature_vector(
     longitude = _number(location.get("longitude"))
     elevation_m = _number(location.get("elevation_m"))
     if latitude is None or not -90.0 <= latitude <= 90.0:
-        raise ValueError("A valid target-location latitude is required for a v2 model.")
+        raise ValueError("A valid target-location latitude is required for a v3 model.")
     if longitude is None or not -180.0 <= longitude <= 180.0:
-        raise ValueError("A valid target-location longitude is required for a v2 model.")
+        raise ValueError("A valid target-location longitude is required for a v3 model.")
 
     weather = weather or {}
     t1, t2, t3 = temperatures
@@ -154,6 +157,15 @@ def build_feature_vector(
         _normalise(weather.get("wet_bulb_temperature_c"), 20.0, 10.0),
         _normalise(weather.get("apparent_temperature_c"), 20.0, 10.0),
         _normalise(weather.get("solar_radiation_instant_wm2"), 150.0, 300.0),
+        _normalise(weather.get("snow_depth_m"), 0.01, 0.1),
+        _normalise(weather.get("direct_radiation_wm2"), 100.0, 200.0),
+        _normalise(weather.get("diffuse_radiation_wm2"), 50.0, 100.0),
+        _normalise(weather.get("boundary_layer_height_m"), 1000.0, 1500.0),
+        _normalise(weather.get("wind_speed_100m_kmh"), 20.0, 20.0),
+        0.0 if _number(weather.get("wind_direction_100m_deg")) is None else math.sin(math.radians(float(weather["wind_direction_100m_deg"]))),
+        0.0 if _number(weather.get("wind_direction_100m_deg")) is None else math.cos(math.radians(float(weather["wind_direction_100m_deg"]))),
+        _normalise(weather.get("soil_temperature_0_to_7cm_c"), 20.0, 10.0),
+        _normalise(weather.get("soil_moisture_0_to_7cm"), 0.25, 0.25),
         1.0 if weather_code == 0 else 0.0,
         1.0 if weather_code is not None and 1 <= weather_code <= 3 else 0.0,
         1.0 if weather_code in (45, 48) else 0.0,
@@ -178,12 +190,12 @@ def build_feature_vector(
 def predict_next_hour(
     model: Mapping[str, Any],
     target_timestamp_unix_seconds: int,
-    previous_bom_hours: Sequence[Mapping[str, Any]],
+    previous_open_meteo_hours: Sequence[Mapping[str, Any]],
     weather: Mapping[str, Any] | None = None,
     timezone_id: str | None = None,
     location: Mapping[str, Any] | None = None,
 ) -> float:
-    """Apply an exported v2 model and return next-hour air temperature in Celsius."""
+    """Apply an exported v3 model and return next-hour air temperature in Celsius."""
     if model.get("format") != FORMAT_NAME or model.get("format_version") != FORMAT_VERSION:
         raise ValueError("Unsupported TempLearn model format/version.")
     if model.get("feature_count") != len(EXPECTED_FEATURES):
@@ -214,7 +226,7 @@ def predict_next_hour(
 
     vector = build_feature_vector(
         target_timestamp_unix_seconds=target_timestamp_unix_seconds,
-        previous_bom_hours=previous_bom_hours,
+        previous_open_meteo_hours=previous_open_meteo_hours,
         weather=weather,
         timezone_id=selected_timezone,
         location=selected_location,
@@ -236,7 +248,7 @@ def _main() -> int:
     prediction = predict_next_hour(
         model=model,
         target_timestamp_unix_seconds=int(request["target_timestamp_unix_seconds"]),
-        previous_bom_hours=request["previous_bom_hours"],
+        previous_open_meteo_hours=request["previous_open_meteo_hours"],
         weather=request.get("weather"),
         timezone_id=request.get("timezone"),
         location=request.get("location"),
