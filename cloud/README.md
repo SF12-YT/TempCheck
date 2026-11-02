@@ -39,18 +39,7 @@ The Android client will send that value in the `x-templearn-key` request header.
 - `POST /v1/run` — authenticated manual inference run for testing.
 - `GET /v1/forecasts?from=2026-11-02T00:00:00Z&to=2026-11-05T00:00:00Z`
 
-The state upload JSON shape is:
-
-```json
-{
-  "weights": [/* exactly 62 coefficients */],
-  "observations": [/* latest three consecutive hourly readings, oldest first */],
-  "feedback": [/* verified predictions with their actual readings */],
-  "context": { "latitude": -33.6153, "longitude": 150.2665, "elevationM": null },
-  "timezone": "Australia/Sydney",
-  "modelVersion": "templearn-62-v1"
-}
-```
+The state upload contains these fields: model weights (exactly 62 finite coefficients), the latest three consecutive observations (oldest first), verified prediction-error samples, geographic context, timezone and model version. Android serialisation will be added in the next integration stage.
 
 Each stored forecast includes its issue time, target time, base model output, feedback correction and final predicted temperature. A forecast is not generated if the model state is missing or its latest observations cannot support the target lead.
 
