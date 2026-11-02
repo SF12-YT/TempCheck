@@ -101,15 +101,17 @@ object OpenMeteoClient {
         longitude: Double,
         timezoneId: String,
         destination: File,
+        pastHours: Int = 24,
         onProgress: (ArchiveFileProgress) -> Unit = {}
     ): File {
         require(latitude.isFinite() && latitude in -90.0..90.0)
         require(longitude.isFinite() && longitude in -180.0..180.0)
         ZoneId.of(timezoneId)
+        val safePastHours = pastHours.coerceIn(1, 24 * 92)
         val timezone = URLEncoder.encode(timezoneId, Charsets.UTF_8.name())
         val url = URL(
             "https://api.open-meteo.com/v1/forecast?latitude=$latitude&longitude=$longitude" +
-                "&hourly=${hourlyFields.joinToString(",")}&past_hours=24&forecast_hours=0" +
+                "&hourly=${hourlyFields.joinToString(",")}&past_hours=$safePastHours&forecast_hours=0" +
                 "&timezone=$timezone&models=best_match&timeformat=unixtime" +
                 "&temperature_unit=celsius&wind_speed_unit=kmh&precipitation_unit=mm&format=csv"
         )
