@@ -33,6 +33,74 @@ data class FeedbackAdjustedPrediction(
     val verifiedPredictions: Int
 )
 
+object PredictionVerificationMethod {
+    const val LIVE = "LIVE"
+    const val WALK_FORWARD_REPLAY = "WALK_FORWARD_REPLAY"
+}
+
+data class WalkForwardPrediction(
+    val targetTimestampSec: Long,
+    val predictionMadeAtSec: Long,
+    val predictedTempC: Double,
+    val localHour: Int,
+    val temperatureTrendC: Double,
+    val cloudCoverPct: Double?,
+    val solarRadiationWm2: Double?,
+    val weatherCode: Int?,
+    val correctionC: Double
+)
+
+/**
+ * Replays one strict one-hour step using only observations that precede the target.
+ * The caller invokes this before inserting the target observation, so the model cannot
+ * see the answer it is being checked against. Feedback samples contain only earlier
+ * targets that have already been reconciled to actual readings.
+ */
+fun predictWalkForwardTarget(
+    priorReadings: List<HourlyTemperature>,
+    targetTimestampSec: Long,
+    model: LearnedWeatherModel,
+    timezoneId: String,
+    locationContext: ModelLocationContext = ModelLocationContext(),
+    feedbackSamples: List<PredictionErrorSample> = emptyList()
+): WalkForwardPrediction? {
+    val recent = priorReadings.takeLast(3)
+    if (recent.size != 3 || recent.zipWithNext().any { (a, b) ->
+            b.timestampSec - a.timestampSec != 3_600L
+        }
+    ) return null
+
+    val base = WeatherLearner.predictNext(recent, model, timezoneId, locationContext)
+        ?: return null
+    if (base.first != targetTimestampSec) return null
+
+    val latest = recent.last()
+    val trend = latest.temperatureC - recent[1].temperatureC
+    val correction = PredictionErrorLearner.correction(
+        samples = feedbackSamples,
+        targetTimestampSec = targetTimestampSec,
+        timezoneId = timezoneId,
+        temperatureTrendC = trend,
+        cloudCoverPct = latest.cloudCoverPct,
+        solarRadiationWm2 = latest.solarRadiationWm2,
+        weatherCode = latest.weatherCode
+    )
+    val zone = runCatching { ZoneId.of(timezoneId) }.getOrElse { ZoneId.of("UTC") }
+    val localHour = Instant.ofEpochSecond(targetTimestampSec).atZone(zone).hour
+
+    return WalkForwardPrediction(
+        targetTimestampSec = targetTimestampSec,
+        predictionMadeAtSec = latest.timestampSec,
+        predictedTempC = (base.second + correction.correctionC).coerceIn(-90.0, 70.0),
+        localHour = localHour,
+        temperatureTrendC = trend,
+        cloudCoverPct = latest.cloudCoverPct,
+        solarRadiationWm2 = latest.solarRadiationWm2,
+        weatherCode = latest.weatherCode,
+        correctionC = correction.correctionC
+    )
+}
+
 /**
  * Conservative online calibration built from predictions that have subsequently been checked
  * against a stored hourly reading. This is deliberately separate from the 62-weight historical
