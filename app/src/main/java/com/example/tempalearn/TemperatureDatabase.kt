@@ -689,6 +689,48 @@ class TemperatureDatabase(context: Context) : SQLiteOpenHelper(
         }
     }
 
+    /** Oldest target still waiting for a matching hourly reading. */
+    fun getOldestPendingPredictionTimestampSec(locationKey: String): Long? {
+        readableDatabase.rawQuery(
+            "SELECT MIN(target_timestamp_sec) FROM prediction_feedback WHERE location_key=? AND actual_temp_c IS NULL",
+            arrayOf(locationKey)
+        ).use { cursor ->
+            if (!cursor.moveToFirst() || cursor.isNull(0)) return null
+            return cursor.getLong(0)
+        }
+    }
+
+    /** Pending rows plus whether their exact target-hour reading is already stored locally. */
+    fun getPendingPredictionDiagnostics(
+        locationKey: String,
+        limit: Int = 5
+    ): List<PendingPredictionDiagnostic> {
+        val safeLimit = limit.coerceIn(1, 20)
+        val result = mutableListOf<PendingPredictionDiagnostic>()
+        readableDatabase.rawQuery(
+            """SELECT p.target_timestamp_sec, p.prediction_made_at_sec, p.verification_method,
+                r.temperature_c
+                FROM prediction_feedback p
+                LEFT JOIN readings r
+                  ON r.location_key=p.location_key
+                 AND r.timestamp_sec=p.target_timestamp_sec
+                WHERE p.location_key=? AND p.actual_temp_c IS NULL
+                ORDER BY p.target_timestamp_sec ASC
+                LIMIT $safeLimit""".trimIndent(),
+            arrayOf(locationKey)
+        ).use { cursor ->
+            while (cursor.moveToNext()) {
+                result += PendingPredictionDiagnostic(
+                    targetTimestampSec = cursor.getLong(0),
+                    predictionMadeAtSec = cursor.getLong(1),
+                    verificationMethod = cursor.getString(2),
+                    matchingReadingTempC = if (cursor.isNull(3)) null else cursor.getDouble(3)
+                )
+            }
+        }
+        return result
+    }
+
     /** Count completed checks by provenance so replay backtests are not presented as live forecasts. */
     fun getVerifiedPredictionCount(locationKey: String, verificationMethod: String): Int {
         readableDatabase.rawQuery(
