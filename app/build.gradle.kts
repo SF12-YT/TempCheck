@@ -52,8 +52,8 @@ android {
         applicationId = "com.example.tempalearn"
         minSdk = 26
         targetSdk = 34
-        versionCode = 36
-        versionName = "0.10.11"
+        versionCode = 37
+        versionName = "0.10.12"
         buildConfigField("String", "TEMPLEARN_CLOUD_BASE_URL", "\"$cloudBaseUrl\"")
         buildConfigField("String", "TEMPLEARN_CLOUD_SYNC_KEY", "\"$cloudSyncKey\"")
     }

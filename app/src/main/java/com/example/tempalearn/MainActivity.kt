@@ -574,8 +574,16 @@ class MainActivity : Activity() {
             ) ?: ZoneId.systemDefault().id)
             val all = db.getLatestReadings(locationKey, 72)
             val recent = all.takeLast(24)
-            val model = db.getModel(locationKey)
-            val sharedModel = db.getModel(AppPreferences.SHARED_MODEL_KEY)
+            val cachedDashboard = prefs.getString("cloud_dashboard_$locationKey", null)
+            val cloudDashboard = cachedDashboard?.let {
+                runCatching { org.json.JSONObject(it) }.getOrNull()
+            }
+            val cloudModelAvailable = cloudDashboard?.optJSONObject("model") != null
+            val cloudSharedModelAvailable = cloudDashboard?.optJSONObject("sharedModel") != null
+            // Old on-device models remain preserved for migration/export, but are not presented
+            // as authoritative once the dashboard is cloud-owned.
+            val model = if (cloudModelAvailable) db.getModel(locationKey) else null
+            val sharedModel = if (cloudSharedModelAvailable) db.getModel(AppPreferences.SHARED_MODEL_KEY) else null
             chartView.setReadings(recent)
             storedCountText.text = db.getSavedCount(locationKey).toString()
             trainingCountText.text = model?.trainingExamples?.toString() ?: "0"
@@ -611,10 +619,6 @@ class MainActivity : Activity() {
 
             // Forecasting and learning now live in the cloud. Android reads the last
             // cached dashboard and never calls the local predictor from the UI.
-            val cachedDashboard = prefs.getString("cloud_dashboard_$locationKey", null)
-            val cloudDashboard = cachedDashboard?.let {
-                runCatching { org.json.JSONObject(it) }.getOrNull()
-            }
             val cloudCounts = cloudDashboard?.optJSONObject("counts")
             val latestForecast = cloudDashboard?.optJSONObject("latestForecast")
             val prediction = latestForecast?.optJSONObject("prediction")
@@ -633,8 +637,8 @@ class MainActivity : Activity() {
                 val localTime = Instant.ofEpochSecond(targetTimestamp)
                     .atZone(runCatching { ZoneId.of(zoneId) }.getOrElse { ZoneId.systemDefault() })
                 val modelDescription = when {
-                    model != null -> "Cloud-trained location model"
-                    sharedModel != null -> "Cloud shared model · adapting to this location"
+                    cloudModelAvailable -> "Cloud-trained location model"
+                    cloudSharedModelAvailable -> "Cloud shared model · adapting to this location"
                     else -> "Cloud TempLearn model"
                 }
                 val replayChecks = cloudCounts?.optInt("walkForwardVerified", 0)
