@@ -1,6 +1,13 @@
 # TempLearn — Android temperature-learning prototype
 
-TempLearn collects hourly air-temperature observations from the Australian Bureau of Meteorology (BOM), stores them locally, and learns a next-hour temperature relationship on-device. The current release is **0.7.0**.
+TempLearn collects hourly air-temperature observations from the Australian Bureau of Meteorology (BOM), stores them locally, and learns a next-hour temperature relationship on-device. The current release is **0.7.2**.
+
+## What's new in 0.7.2
+
+- Added a temporary, user-started Android foreground-service diagnostic that refreshes one persistent notification every five seconds.
+- Added Start and Stop controls in Settings, plus a Stop test action on the ongoing notification.
+- The test is independent of the weather sync and continues when the TempLearn activity is dismissed from Recents, subject to Android's foreground-service and device power-management rules.
+- Android's system-level Force stop / Active apps Stop action still terminates the service; this is an operating-system safety control, not an app bug.
 
 ## What's new in 0.7.0
 
