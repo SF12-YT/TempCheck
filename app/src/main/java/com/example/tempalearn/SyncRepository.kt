@@ -358,74 +358,106 @@ object SyncRepository {
                     )
                 )
             }
-            // Keep the model fixed for this import pass. Each newly arriving actual hour is
-            // checked against a one-hour prediction made from the three preceding observations,
-            // before that target row is inserted. This is a strict walk-forward replay: no target
-            // value or later observation can leak into its own prediction.
-            val walkForwardModel = db.getModel(locationKey)
-            val walkForwardHistory = db.getLatestReadings(locationKey, 72).toMutableList()
-            var feedbackSamples = db.getVerifiedPredictionErrors(locationKey)
-            var lastProcessedTimestamp = db.getLatestTimestampSec(locationKey) ?: Long.MIN_VALUE
-            val seenIncomingTimestamps = mutableSetOf<Long>()
+            // Replay the entire rolling 24-hour observation window, including rows that
+            // were already in SQLite before this app version was installed. The temporary
+            // replay model is fitted only on observations strictly older than that window.
+            // It is never saved as the production model and never sees any target in this replay.
+            val replayCutoffSec = Instant.now().epochSecond - 24L * 60L * 60L
+            val allReadingsForReplay = db.getAllReadingsByLocation()[locationKey].orEmpty()
+            val replayTrainingReadings = allReadingsForReplay.filter {
+                it.timestampSec < replayCutoffSec
+            }
+            val replayModel = WeatherLearner.trainLocal(
+                readings = replayTrainingReadings,
+                timezoneId = profile.timezoneId,
+                locationContext = profile.modelContext()
+            )
+
+            val existingLatest = db.getLatestReadings(locationKey, 96)
+            val existingRecentReadings = existingLatest.filter {
+                it.timestampSec >= replayCutoffSec
+            }
+            val walkForwardHistory = existingLatest.filter {
+                it.timestampSec < replayCutoffSec
+            }.takeLast(72).toMutableList()
+            val existingTimestamps = existingLatest.mapTo(mutableSetOf()) { it.timestampSec }
+            val downloadedRecentRows = mutableListOf<HourlyTemperature>()
             var uniqueForecastRows = 0
 
+            // Parse first, then merge downloaded readings with already stored rows. This makes
+            // upgrading an installation able to verify its existing recent observations too.
             OpenMeteoClient.importHourlyArchiveFile(
                 recentForecastFile,
-                onBatch = { batch ->
-                    batch.sortedBy { it.timestampSec }.forEach { reading ->
-                        if (reading.timestampSec <= lastProcessedTimestamp ||
-                            !seenIncomingTimestamps.add(reading.timestampSec)
-                        ) return@forEach
-
-                        val walkForward = walkForwardModel?.let { model ->
-                            predictWalkForwardTarget(
-                                priorReadings = walkForwardHistory,
-                                targetTimestampSec = reading.timestampSec,
-                                model = model,
-                                timezoneId = profile.timezoneId,
-                                locationContext = profile.modelContext(),
-                                feedbackSamples = feedbackSamples
-                            )
-                        }
-                        walkForward?.let { prediction ->
-                            db.savePendingPrediction(
-                                locationKey = locationKey,
-                                targetTimestampSec = prediction.targetTimestampSec,
-                                predictedTempC = prediction.predictedTempC,
-                                predictedAtSec = prediction.predictionMadeAtSec,
-                                localHour = prediction.localHour,
-                                temperatureTrendC = prediction.temperatureTrendC,
-                                cloudCoverPct = prediction.cloudCoverPct,
-                                solarRadiationWm2 = prediction.solarRadiationWm2,
-                                weatherCode = prediction.weatherCode,
-                                verificationMethod = PredictionVerificationMethod.WALK_FORWARD_REPLAY
-                            )
-                        }
-
-                        val inserted = db.insertReadingsIfAbsent(locationKey, listOf(reading))
-                        if (inserted > 0) {
-                            uniqueForecastRows += inserted
-                            lastProcessedTimestamp = reading.timestampSec
-                            // The reading is now available, so reconcile its forecast before
-                            // using this error to adjust the next walk-forward prediction.
-                            db.reconcilePendingPredictions(locationKey)
-                            feedbackSamples = db.getVerifiedPredictionErrors(locationKey)
-                            walkForwardHistory += reading
-                            if (walkForwardHistory.size > 72) walkForwardHistory.removeAt(0)
-                        }
-                    }
-                },
+                onBatch = { batch -> downloadedRecentRows.addAll(batch) },
                 onProgress = { transfer ->
                     onProgress(
                         ArchiveDownloadProgress(
                             ArchiveProgressStage.IMPORTING,
-                            transfer.bytesTransferred,
+                            transfer.bytesProcessed,
                             transfer.totalBytes
                         )
                     )
                 }
             )
-            // Reconcile any earlier live forecast that became available in this refresh.
+
+            val recentByTimestamp = linkedMapOf<Long, HourlyTemperature>()
+            existingRecentReadings.forEach { recentByTimestamp[it.timestampSec] = it }
+            downloadedRecentRows
+                .filter { it.timestampSec >= replayCutoffSec }
+                .forEach { recentByTimestamp.putIfAbsent(it.timestampSec, it) }
+
+            // Walk forward in timestamp order. For each target, use only the three immediately
+            // preceding actual observations and feedback from earlier targets. The target's
+            // actual temperature is not appended to the history until after its prediction.
+            recentByTimestamp.values.sortedBy { it.timestampSec }.forEach { reading ->
+                val feedbackBeforeTarget = db.getVerifiedPredictionErrors(locationKey)
+                    .filter { it.targetTimestampSec < reading.timestampSec }
+                val walkForward = replayModel?.let { model ->
+                    predictWalkForwardTarget(
+                        priorReadings = walkForwardHistory,
+                        targetTimestampSec = reading.timestampSec,
+                        model = model,
+                        timezoneId = profile.timezoneId,
+                        locationContext = profile.modelContext(),
+                        feedbackSamples = feedbackBeforeTarget
+                    )
+                }
+
+                walkForward?.let { prediction ->
+                    db.savePendingPrediction(
+                        locationKey = locationKey,
+                        targetTimestampSec = prediction.targetTimestampSec,
+                        predictedTempC = prediction.predictedTempC,
+                        predictedAtSec = prediction.predictionMadeAtSec,
+                        localHour = prediction.localHour,
+                        temperatureTrendC = prediction.temperatureTrendC,
+                        cloudCoverPct = prediction.cloudCoverPct,
+                        solarRadiationWm2 = prediction.solarRadiationWm2,
+                        weatherCode = prediction.weatherCode,
+                        verificationMethod = PredictionVerificationMethod.WALK_FORWARD_REPLAY
+                    )
+                }
+
+                // Newly fetched targets are inserted only after their prediction is saved.
+                // Existing targets stay in place; both cases can now be reconciled to truth.
+                if (existingTimestamps.add(reading.timestampSec)) {
+                    uniqueForecastRows += db.insertReadingsIfAbsent(locationKey, listOf(reading))
+                }
+                db.reconcilePendingPredictions(locationKey)
+
+                walkForwardHistory += reading
+                if (walkForwardHistory.size > 72) walkForwardHistory.removeAt(0)
+            }
+
+            // Older rows returned at the rolling-window boundary can be safely retained as
+            // observations, but are not treated as targets in the 24-hour verification replay.
+            downloadedRecentRows
+                .filter { it.timestampSec < replayCutoffSec && existingTimestamps.add(it.timestampSec) }
+                .sortedBy { it.timestampSec }
+                .forEach { reading ->
+                    uniqueForecastRows += db.insertReadingsIfAbsent(locationKey, listOf(reading))
+                }
+
             db.reconcilePendingPredictions(locationKey)
             prefs.edit().putLong(AppPreferences.syncTimeKey(locationKey), Instant.now().epochSecond).apply()
             return uniqueForecastRows
