@@ -28,7 +28,7 @@ The JSON importer streams the response structure and imports the 15 hourly field
 
 Other locations continue to use a single complete CSV response from the Open-Meteo Historical Weather API. Subsequent syncs for all locations request only the latest stored date through the latest date accepted by the API, then upsert records by timestamp. This fills days missed while the app was offline without downloading the full archive again. The request end date is capped at yesterday UTC because the Archive API does not accept today's date. Routine refreshes also re-train the local model after importing new readings.
 
-The default-location JSON snapshot is an immutable historical dataset, not a live feed. Daily refreshes use Open-Meteo Archive API to add the latest available date after the snapshot. Historical reanalysis is a model-based reconstruction, not a direct observation from a local weather station. Best Match products and their resolution may vary across dates, so this is a continuous learning dataset rather than a homogeneous station record.
+The default-location JSON snapshot is an immutable historical dataset, not a live feed. Hourly refreshes use Open-Meteo Archive API to add the latest available date after the snapshot. Historical reanalysis is a model-based reconstruction, not a direct observation from a local weather station. Best Match products and their resolution may vary across dates, so this is a continuous learning dataset rather than a homogeneous station record.
 
 ## The 15 hourly training variables
 
