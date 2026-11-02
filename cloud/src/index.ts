@@ -42,7 +42,7 @@ async function fetchPastObservations(env:Env,issuedSec:number):Promise<Observati
   await env.DB.prepare("INSERT OR REPLACE INTO cloud_observations (location_id,timestamp_sec,temperature_c,payload_json) VALUES (?,?,?,?)")
    .bind(env.LOCATION_ID,row.timestampSec,row.temperatureC,JSON.stringify(row)).run();
  }
- return recent;
+ return rows;
 }
 async function loadCloudFeedback(env:Env,uploaded:ErrorSample[]):Promise<ErrorSample[]>{
  const result=await env.DB.prepare("SELECT target_timestamp_sec,predicted_temp_c,actual_temp_c,local_hour,temperature_trend_c,cloud_cover_pct,solar_radiation_wm2,weather_code FROM cloud_verified_forecasts WHERE location_id=? ORDER BY target_timestamp_sec DESC LIMIT 5000").bind(env.LOCATION_ID).all<Record<string,unknown>>();
@@ -65,8 +65,9 @@ async function generate(env:Env,issuedMs:number){
  const state=await env.DB.prepare("SELECT weights_json,feedback_json,context_json,timezone,model_version FROM cloud_model_state WHERE location_id=?").bind(env.LOCATION_ID).first<Record<string,unknown>>();
  if(!state)return {generated:false,reason:"No Android model state has been uploaded yet"};
  const issuedSec=Math.floor(issuedMs/1000);
- const observations=await fetchPastObservations(env,issuedSec);
- await reconcileForecasts(env,observations,issuedSec);
+ const allPastObservations=await fetchPastObservations(env,issuedSec);
+ await reconcileForecasts(env,allPastObservations,issuedSec);
+ const observations=allPastObservations.slice(-3);
  const feedback=await loadCloudFeedback(env,JSON.parse(String(state.feedback_json)) as ErrorSample[]);
  const targetSec=(Math.floor(issuedMs/3600000)+1)*3600;
  const result=predict({weights:JSON.parse(String(state.weights_json)),observations,feedback,context:JSON.parse(String(state.context_json)),timezone:String(state.timezone||env.TIMEZONE),targetTimestampSec:targetSec,predictionMadeAtSec:issuedSec,modelVersion:String(state.model_version)});
