@@ -182,6 +182,7 @@ class TemperatureDatabase(context: Context) : SQLiteOpenHelper(
                 cloud_cover_pct REAL,
                 solar_radiation_wm2 REAL,
                 weather_code INTEGER,
+                verification_method TEXT NOT NULL DEFAULT 'LIVE',
                 PRIMARY KEY(location_key, target_timestamp_sec)
             )""".trimIndent()
         )
@@ -316,6 +317,11 @@ class TemperatureDatabase(context: Context) : SQLiteOpenHelper(
         if (oldVersion < 13) {
             // v0.10.2 adds separate storage for predictions and their later verified errors.
             createPredictionFeedbackTable(db)
+        }
+        if (oldVersion < 14) {
+            // v0.10.4 labels genuine live forecasts separately from strict historical
+            // walk-forward checks generated before newly imported observations are inserted.
+            db.execSQL("ALTER TABLE prediction_feedback ADD COLUMN verification_method TEXT NOT NULL DEFAULT 'LIVE'")
         }
     }
 
@@ -463,7 +469,7 @@ class TemperatureDatabase(context: Context) : SQLiteOpenHelper(
         val db = writableDatabase
         db.beginTransaction()
         try {
-            val targetTables = listOf("readings", "model_state", "location_profiles")
+            val targetTables = listOf("readings", "model_state", "location_profiles", "prediction_feedback")
             for (table in targetTables) {
                 db.rawQuery("SELECT 1 FROM $table WHERE location_key=? LIMIT 1", arrayOf(toKey)).use { cursor ->
                     if (cursor.moveToFirst()) return false
@@ -594,7 +600,8 @@ class TemperatureDatabase(context: Context) : SQLiteOpenHelper(
         temperatureTrendC: Double,
         cloudCoverPct: Double?,
         solarRadiationWm2: Double?,
-        weatherCode: Int?
+        weatherCode: Int?,
+        verificationMethod: String = PredictionVerificationMethod.LIVE
     ): Boolean {
         require(predictedTempC.isFinite() && temperatureTrendC.isFinite())
         val values = ContentValues().apply {
@@ -607,6 +614,7 @@ class TemperatureDatabase(context: Context) : SQLiteOpenHelper(
             putNullable("cloud_cover_pct", cloudCoverPct)
             putNullable("solar_radiation_wm2", solarRadiationWm2)
             if (weatherCode == null) putNull("weather_code") else put("weather_code", weatherCode)
+            put("verification_method", verificationMethod)
         }
         val database = writableDatabase
         database.beginTransaction()
@@ -838,7 +846,7 @@ class TemperatureDatabase(context: Context) : SQLiteOpenHelper(
 
     companion object {
         private const val DATABASE_NAME = "templearn_local.db"
-        private const val DATABASE_VERSION = 13
+        private const val DATABASE_VERSION = 14
     }
 }
 
