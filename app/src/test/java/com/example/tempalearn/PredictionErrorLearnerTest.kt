@@ -101,6 +101,39 @@ class PredictionErrorLearnerTest {
     )
 
     @Test
+    fun nextLocalHourTargetRemainsFutureWhenLatestObservationIsDelayed() {
+        val zone = ZoneId.of("Australia/Sydney")
+        val now = ZonedDateTime.of(2026, 11, 2, 17, 38, 0, 0, zone).toEpochSecond()
+        val expected = ZonedDateTime.of(2026, 11, 2, 18, 0, 0, 0, zone).toEpochSecond()
+        assertEquals(expected, nextLocalHourTimestamp(now, zone.id))
+    }
+
+    @Test
+    fun livePredictionCanTargetNextClockHourWithTwoHourOldObservation() {
+        val target = targetTimestamp + 3_600L
+        val result = WeatherLearner.predictAtTimestamp(
+            readings = threePriorReadings(),
+            model = walkForwardModel(),
+            timezoneId = "Australia/Sydney",
+            targetTimestampSec = target
+        )
+        assertTrue("Expected a live estimate for a future target", result != null)
+        assertEquals(target, result!!.first)
+        assertEquals(20.0, result.second, 0.0001)
+    }
+
+    @Test
+    fun livePredictionRejectsTargetsMoreThanThreeHoursAfterLatestObservation() {
+        val result = WeatherLearner.predictAtTimestamp(
+            readings = threePriorReadings(),
+            model = walkForwardModel(),
+            timezoneId = "Australia/Sydney",
+            targetTimestampSec = targetTimestamp + 3 * 3_600L
+        )
+        assertTrue("Excessively stale inputs must not create a live forecast", result == null)
+    }
+
+    @Test
     fun walkForwardPredictionUsesOnlyTheThreeHoursImmediatelyBeforeItsTarget() {
         val result = predictWalkForwardTarget(
             priorReadings = threePriorReadings(),
