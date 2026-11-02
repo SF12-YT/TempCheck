@@ -689,6 +689,18 @@ class TemperatureDatabase(context: Context) : SQLiteOpenHelper(
         }
     }
 
+    /** Count completed checks by provenance so replay backtests are not presented as live forecasts. */
+    fun getVerifiedPredictionCount(locationKey: String, verificationMethod: String): Int {
+        readableDatabase.rawQuery(
+            """SELECT COUNT(*) FROM prediction_feedback
+                WHERE location_key=? AND verification_method=?
+                  AND actual_temp_c IS NOT NULL AND error_c IS NOT NULL""".trimIndent(),
+            arrayOf(locationKey, verificationMethod)
+        ).use { cursor ->
+            return if (cursor.moveToFirst()) cursor.getInt(0) else 0
+        }
+    }
+
     /** Return every completed, timestamp-matched prediction; this history has no sample cap. */
     fun getVerifiedPredictionErrors(locationKey: String): List<PredictionErrorSample> {
         val result = mutableListOf<PredictionErrorSample>()
