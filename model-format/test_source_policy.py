@@ -81,21 +81,19 @@ class SourcePolicyTests(unittest.TestCase):
         self.assertIn('splitCsv(line).mapIndexed(::normalizeCsvHeaderCell)', client)
         self.assertIn('header = normalizedCells', client)
         self.assertIn('Header preview:', client)
-        self.assertIn('versionName = "0.10.10"', (ROOT / "app/build.gradle.kts").read_text(encoding="utf-8"))
+        self.assertIn('versionName = "0.10.11"', (ROOT / "app/build.gradle.kts").read_text(encoding="utf-8"))
 
-    def test_pending_live_forecasts_expand_lookback_and_expose_match_diagnostics(self):
-        database = (KOTLIN / "TemperatureDatabase.kt").read_text(encoding="utf-8")
-        sync = (KOTLIN / "SyncRepository.kt").read_text(encoding="utf-8")
-        client = (KOTLIN / "OpenMeteoClient.kt").read_text(encoding="utf-8")
+    def test_dashboard_displays_cloud_forecasts_instead_of_local_predictions(self):
         dashboard = (KOTLIN / "MainActivity.kt").read_text(encoding="utf-8")
-        self.assertIn("getOldestPendingPredictionTimestampSec", database)
-        self.assertIn("getPendingPredictionDiagnostics", database)
-        self.assertIn("LEFT JOIN readings r", database)
-        self.assertIn("oldestPendingTargetSec", sync)
-        self.assertIn("pastHours = pendingLookbackHours", sync)
-        self.assertIn("&past_hours=$safePastHours", client)
-        self.assertIn("Pending targets:", dashboard)
-        self.assertIn("provider value not loaded", dashboard)
+        cloud_client = (KOTLIN / "CloudSyncClient.kt").read_text(encoding="utf-8")
+        worker = (ROOT / "cloud/src/index.ts").read_text(encoding="utf-8")
+        self.assertIn('cloud_dashboard_$locationKey', dashboard)
+        self.assertIn('latestForecast', dashboard)
+        self.assertIn('predictedTempC', dashboard)
+        self.assertNotIn('predictAndStoreNextHour(', dashboard)
+        self.assertIn('"/v1/dashboard?locationId="', cloud_client)
+        self.assertIn('async function generateForecast', worker)
+        self.assertIn('past_hours: "96"', worker)
 
     def test_five_second_test_posts_distinct_high_importance_alerts(self):
         service = (KOTLIN / "BackgroundNotificationTestService.kt").read_text(encoding="utf-8")
@@ -143,25 +141,22 @@ class SourcePolicyTests(unittest.TestCase):
         self.assertNotIn("KEY_STATION_", sync)
         self.assertNotIn("KEY_ONE_FILE_ARCHIVE_SETUP_COMPLETE", sync)
 
-    def test_archive_backfill_is_capped_and_recent_forecast_is_separate_best_effort_step(self):
+    def test_cloud_is_authoritative_and_uses_the_96_hour_past_only_feed(self):
         sync = (KOTLIN / "SyncRepository.kt").read_text(encoding="utf-8")
-        self.assertIn('LocalDate.now(ZoneId.of("UTC")).minusDays(1)', sync)
-        self.assertIn("val archiveEndDate = minOf(LocalDate.now(zone), LocalDate.now(ZoneId.of(\"UTC\")).minusDays(1))", sync)
-        self.assertIn("startDate, archiveEndDate,", sync)
-        self.assertNotIn("minOf(latestDate ?: archiveEndDate, archiveEndDate)", sync)
-        self.assertIn("private fun refreshRecentForecastDataset", sync)
-        self.assertIn("downloadRecentHourlyForecastToFile", sync)
-        self.assertIn("recent_forecast_past.csv", sync)
-        self.assertIn("getOldestPendingPredictionTimestampSec", sync)
-        self.assertIn("pastHours = pendingLookbackHours", sync)
-        self.assertNotIn("recent_forecast_yesterday_today.csv", sync)
-        historical = sync.split("fun downloadHistoricalDataset", 1)[1].split("private fun refreshRecentForecastDataset", 1)[0]
-        self.assertNotIn("downloadRecentHourlyForecastToFile", historical)
-        self.assertLess(sync.index('putBoolean(completeKey, true)'), sync.index("private fun refreshRecentForecastDataset"))
-        orchestration = sync.split("fun sync(", 1)[1]
-        self.assertLess(orchestration.index("pretrainHistoricalDataset"), orchestration.index("refreshRecentForecastDataset"))
-        self.assertIn("catch (error: Exception)", orchestration)
-        self.assertIn("recentUpdateWarning", orchestration)
+        cloud_client = (KOTLIN / "CloudSyncClient.kt").read_text(encoding="utf-8")
+        worker = (ROOT / "cloud/src/index.ts").read_text(encoding="utf-8")
+        orchestration = sync.split("fun sync(", 1)[1].split("\n    /**", 1)[0]
+        self.assertIn("downloadHistoricalDataset", orchestration)
+        self.assertIn("CloudSyncClient.bootstrapAndSync", orchestration)
+        self.assertNotIn("pretrainHistoricalDataset", orchestration)
+        self.assertNotIn("refreshRecentForecastDataset", orchestration)
+        self.assertIn("PAGE_SIZE = 1000", cloud_client)
+        self.assertIn("/v1/bootstrap/batch", cloud_client)
+        self.assertIn('past_hours: "96"', worker)
+        self.assertIn('forecast_hours: "0"', worker)
+        self.assertIn('models: "best_match"', worker)
+        self.assertIn("INSERT OR IGNORE INTO cloud_observations", worker)
+        self.assertIn("futureProviderTemperatureInputs: false", worker)
 
     def test_recent_forecast_requests_expandable_past_hours_for_pending_targets(self):
         client = (KOTLIN / "OpenMeteoClient.kt").read_text(encoding="utf-8")
@@ -196,19 +191,19 @@ class SourcePolicyTests(unittest.TestCase):
         self.assertIn('writableDatabase.insertWithOnConflict("model_state"', database)
         self.assertIn("fun getAllReadingsByLocation()", database)
 
-    def test_historical_json_is_trained_before_optional_recent_csv(self):
+    def test_initial_history_is_transferred_and_trained_in_the_cloud(self):
         sync = (KOTLIN / "SyncRepository.kt").read_text(encoding="utf-8")
-        orchestration = sync.split("fun sync(", 1)[1]
-        self.assertIn("downloaded.initialImportCompletedNow", orchestration)
-        self.assertIn("existingLocalModel == null", orchestration)
-        self.assertIn("existingSharedModel == null", orchestration)
-        self.assertLess(orchestration.index("pretrainHistoricalDataset"), orchestration.index("refreshRecentForecastDataset"))
-        main = (KOTLIN / "MainActivity.kt").read_text(encoding="utf-8")
-        self.assertIn("historical learning is retained", main)
-        self.assertIn("recentUpdateWarning", main)
-        notification = (KOTLIN / "NotificationHelper.kt").read_text(encoding="utf-8")
-        self.assertIn("historical learning was retained", notification)
-        self.assertIn("history ready; recent refresh pending", notification)
+        client = (KOTLIN / "CloudSyncClient.kt").read_text(encoding="utf-8")
+        worker = (ROOT / "cloud/src/index.ts").read_text(encoding="utf-8")
+        orchestration = sync.split("fun sync(", 1)[1].split("\n    /**", 1)[0]
+        self.assertIn("downloadHistoricalDataset", orchestration)
+        self.assertIn("CloudSyncClient.bootstrapAndSync", orchestration)
+        self.assertIn("getReadingsPage", client)
+        self.assertIn("/v1/bootstrap/start", client)
+        self.assertIn("/v1/bootstrap/complete", client)
+        self.assertIn("trainLocalFromExamples", worker)
+        self.assertIn("trainSharedFromSeriesExamples", worker)
+        self.assertIn("runWalkForwardReplay", worker)
 
     def test_reduced_archive_invalidates_models_after_reimport(self):
         sync = (KOTLIN / "SyncRepository.kt").read_text(encoding="utf-8")
@@ -272,14 +267,16 @@ class SourcePolicyTests(unittest.TestCase):
         self.assertIn("maybePromptExactHourlyAlarmAccess", main)
         self.assertIn("HourlySyncScheduler.rescheduleForLocation(applicationContext)", main)
 
-    def test_feedback_ui_separates_replay_backtests_from_live_forecasts(self):
-        database = (KOTLIN / "TemperatureDatabase.kt").read_text(encoding="utf-8")
+    def test_feedback_ui_uses_cloud_verification_counts(self):
         main = (KOTLIN / "MainActivity.kt").read_text(encoding="utf-8")
-        self.assertIn("fun getVerifiedPredictionCount(locationKey: String, verificationMethod: String)", database)
-        self.assertIn("PredictionVerificationMethod.WALK_FORWARD_REPLAY", main)
-        self.assertIn("PredictionVerificationMethod.LIVE", main)
-        self.assertIn("walk-forward backtest checks", main)
-        self.assertIn("live forecast-feed matches", main)
+        worker = (ROOT / "cloud/src/index.ts").read_text(encoding="utf-8")
+        self.assertIn("walk-forward checks", main)
+        self.assertIn("live verified", main)
+        self.assertIn("walkForwardVerified", main)
+        self.assertIn("liveVerified", main)
+        self.assertIn("verification_method TEXT NOT NULL", worker)
+        self.assertIn("WALK_FORWARD_REPLAY", worker)
+        self.assertIn('actual.temperatureC,"LIVE",verifiedAtSec', worker)
 
     def test_live_forecast_targets_next_local_hour_when_observations_lag(self):
         feedback = (KOTLIN / "PredictionFeedback.kt").read_text(encoding="utf-8")
@@ -354,43 +351,31 @@ class SourcePolicyTests(unittest.TestCase):
         self.assertIn("verify --verbose --print-certs app/build/outputs/apk/release/app-release.apk", workflow)
         self.assertIn("run: gradle --no-daemon assembleDebug", workflow)
 
-    def test_verified_prediction_errors_drive_conservative_live_calibration(self):
+    def test_cloud_owns_verified_error_calibration(self):
         feedback = (KOTLIN / "PredictionFeedback.kt").read_text(encoding="utf-8")
         database = (KOTLIN / "TemperatureDatabase.kt").read_text(encoding="utf-8")
         sync = (KOTLIN / "SyncRepository.kt").read_text(encoding="utf-8")
+        client = (KOTLIN / "CloudSyncClient.kt").read_text(encoding="utf-8")
         main = (KOTLIN / "MainActivity.kt").read_text(encoding="utf-8")
-        self.assertNotIn("MINIMUM_VERIFIED_PREDICTIONS", feedback)
-        self.assertNotIn("MAX_SAMPLES", feedback)
-        self.assertIn("recent.size.toDouble() / (recent.size + 8.0)", feedback)
+        worker = (ROOT / "cloud/src/index.ts").read_text(encoding="utf-8")
         self.assertIn("actualTempC - sample.predictedTempC", feedback)
-        self.assertIn("temperatureTrendC", feedback)
-        self.assertIn("cloudCoverPct", feedback)
-        self.assertIn("solarRadiationWm2", feedback)
-        self.assertIn("weatherBucket", feedback)
-        self.assertIn("coerceIn(-3.5, 3.5)", feedback)
         self.assertIn("getVerifiedPredictionErrors", database)
-        self.assertIn("getPendingPredictionCount", database)
-        self.assertIn("Return every completed, timestamp-matched prediction; this history has no sample cap.", database)
-        self.assertIn("actual_temp_c IS NOT NULL AND error_c IS NOT NULL", database)
-        self.assertIn("reconcilePendingPredictions(locationKey)", sync)
-        self.assertIn("predictAndStoreNextHour(", sync)
-        self.assertIn("predictAndStoreNextHour(", main)
-        self.assertIn("getPendingPredictionCount", main)
-        self.assertIn("prediction_feedback", database)
-        self.assertIn("actual_temp_c IS NULL", database)
-        self.assertIn("nextLocalHourTimestamp(nowSec, timezoneId)", feedback)
-        self.assertIn("WeatherLearner.predictAtTimestamp", feedback)
-        self.assertNotIn("if (base.first > nowSec)", feedback)
+        self.assertIn("cloud.bootstrapComplete", sync)
+        self.assertIn("CloudSyncClient.bootstrapAndSync", sync)
+        self.assertIn("/v1/bootstrap/feedback/batch", client)
+        self.assertIn("cloud_imported_feedback", worker)
+        self.assertIn("calculateCorrection", (ROOT / "cloud/src/inference.ts").read_text(encoding="utf-8"))
+        self.assertNotIn("predictAndStoreNextHour(", main)
+        self.assertIn('cloud_dashboard_$locationKey', main)
 
-    def test_historical_json_is_deleted_only_after_successful_training(self):
+    def test_historical_json_is_deleted_only_after_cloud_bootstrap_and_training(self):
         sync = (KOTLIN / "SyncRepository.kt").read_text(encoding="utf-8")
-        orchestration = sync.split("fun sync(", 1)[1]
-        self.assertIn("trained.modelReady", orchestration)
+        orchestration = sync.split("fun sync(", 1)[1].split("\n    /**", 1)[0]
+        self.assertIn("cloud.bootstrapComplete && cloud.modelReady", orchestration)
         self.assertIn('downloaded.localArchivePath.endsWith(".json"', orchestration)
         self.assertIn("historicalJson.delete()", orchestration)
-        self.assertLess(orchestration.index("pretrainHistoricalDataset"), orchestration.index("historicalJson.delete()"))
-        self.assertIn("db.clearPredictionFeedback(locationKey)", sync)
-        self.assertIn("The full hourly series is stored in SQLite", sync)
+        self.assertLess(orchestration.index("CloudSyncClient.bootstrapAndSync"), orchestration.index("historicalJson.delete()"))
+        self.assertIn("complete historical archive remains cached locally", orchestration)
 
     def test_archive_retries_rate_limits(self):
         client = (KOTLIN / "OpenMeteoClient.kt").read_text(encoding="utf-8")
