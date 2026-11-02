@@ -19,3 +19,7 @@ LOCATION_ID = "mount-boyce-au"
 LATITUDE = "-33.6153"
 LONGITUDE = "150.2665"
 TIMEZONE = "Australia/Sydney"
+
+# Historical training is CPU-intensive; requires a Workers Paid plan.
+[limits]
+cpu_ms = 300000
