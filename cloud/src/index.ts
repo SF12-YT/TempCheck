@@ -33,6 +33,8 @@ export default {
    let body:any; try{body=await request.json();}catch{return json({error:"Invalid JSON"},400);}
    if(!Array.isArray(body.weights)||body.weights.length!==62||!body.weights.every(Number.isFinite)) return json({error:"Expected 62 finite model weights"},400);
    if(!Array.isArray(body.observations)||body.observations.length<3) return json({error:"Three hourly observations required"},400);
+   if(body.feedback!==undefined&&!Array.isArray(body.feedback)) return json({error:"feedback must be an array"},400);
+   if(body.context!==undefined&&(typeof body.context!=="object"||body.context===null)) return json({error:"context must be an object"},400);
    const obs=body.observations.slice(-3);
    if(obs[1].timestampSec-obs[0].timestampSec!==3600||obs[2].timestampSec-obs[1].timestampSec!==3600) return json({error:"Observations must be consecutive hourly readings"},400);
    await env.DB.prepare("INSERT INTO cloud_model_state (location_id,weights_json,observations_json,feedback_json,context_json,timezone,model_version,updated_at) VALUES (?,?,?,?,?,?,?,?) ON CONFLICT(location_id) DO UPDATE SET weights_json=excluded.weights_json,observations_json=excluded.observations_json,feedback_json=excluded.feedback_json,context_json=excluded.context_json,timezone=excluded.timezone,model_version=excluded.model_version,updated_at=excluded.updated_at")
