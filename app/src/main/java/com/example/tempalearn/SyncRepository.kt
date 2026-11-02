@@ -340,15 +340,26 @@ object SyncRepository {
                 throw java.io.IOException("Could not create the local recent-data folder.")
             }
 
-            // Fetch only the rolling 24 hours before the current local hour, never forecast hours.
-            // The SQLite primary key plus CONFLICT_IGNORE prevents overlapping timestamps from
-            // being inserted or counted as new training data.
-            val recentForecastFile = File(archiveDirectory, "recent_forecast_past_24h.csv")
+            // Include enough completed past hours to cover the oldest pending forecast target.
+            // This feed excludes future hours, so a target remains pending until its timestamp
+            // becomes available as a past hour.
+            val nowSec = Instant.now().epochSecond
+            val oldestPendingTargetSec = db.getOldestPendingPredictionTimestampSec(locationKey)
+            val pendingLookbackHours = oldestPendingTargetSec?.let { targetSec ->
+                val elapsed = (nowSec - targetSec).coerceAtLeast(0L)
+                val required = (elapsed + 3_599L) / 3_600L + 2L
+                required.coerceIn(24L, 24L * 92L).toInt()
+            } ?: 24
+            val recentForecastFile = File(
+                archiveDirectory,
+                "recent_forecast_past_${pendingLookbackHours}h.csv"
+            )
             OpenMeteoClient.downloadRecentHourlyForecastToFile(
                 profile.latitude,
                 profile.longitude,
                 profile.timezoneId,
-                recentForecastFile
+                recentForecastFile,
+                pastHours = pendingLookbackHours
             ) { transfer ->
                 onProgress(
                     ArchiveDownloadProgress(
