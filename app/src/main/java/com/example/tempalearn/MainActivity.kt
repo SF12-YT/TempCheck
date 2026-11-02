@@ -188,7 +188,7 @@ class MainActivity : Activity() {
         }
         addText(
             content,
-            "Collect hourly weather, learn how conditions relate to temperature, and keep each location's history on this phone.",
+            "View hourly weather and TempLearn's cloud forecasts. The weather archive stays cached on this phone; forecasting and learning run in the cloud.",
             14f,
             mutedColor,
             false
@@ -222,7 +222,7 @@ class MainActivity : Activity() {
             setOnClickListener { syncNow(manual = true) }
         }
         locationCard.addView(syncButton, LinearLayout.LayoutParams(-1, dp(52)).apply { topMargin = dp(15) })
-        statusText = addText(locationCard, "Ready. Weather readings and models stay on this phone.", 12f, mutedColor, false)
+        statusText = addText(locationCard, "Ready. The weather archive is cached here; forecasting and learning run in the cloud.", 12f, mutedColor, false)
         statusText.setPadding(0, dp(10), 0, 0)
 
         val predictionCard = newCard(Color.rgb(18, 59, 56)).apply { setPadding(dp(19), dp(19), dp(19), dp(18)) }
@@ -231,13 +231,13 @@ class MainActivity : Activity() {
         predictionText = addText(predictionCard, "— °C", 36f, Color.WHITE, true).apply {
             setPadding(0, dp(7), 0, dp(2))
         }
-        predictionSubtext = addText(predictionCard, "Fetch weather to start or update the learning model.", 12f, Color.rgb(207, 226, 220), false)
+        predictionSubtext = addText(predictionCard, "Sync with TempLearn cloud to start or refresh the forecast.", 12f, Color.rgb(207, 226, 220), false)
         predictionSubtext.setLineSpacing(dp(2).toFloat(), 1.0f)
 
         val statRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
         predictionCard.addView(statRow, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(17) })
         val savedStat = metricBlock("STORED HOURS", "0")
-        val trainingStat = metricBlock("LOCAL EXAMPLES", "0")
+        val trainingStat = metricBlock("TRAINING EXAMPLES", "0")
         val accuracyStat = metricBlock("ACCURACY", "—")
         storedCountText = savedStat.second
         trainingCountText = trainingStat.second
@@ -278,7 +278,7 @@ class MainActivity : Activity() {
         historyRows = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         historyCard.addView(historyRows, LinearLayout.LayoutParams(-1, -2))
 
-        val attribution = "Historical hourly temperature targets and predictors: Open-Meteo Historical Weather API, Best Match reanalysis. The default location's complete published JSON archive is downloaded once, imported into local storage, used for historical training, and then deleted to reclaim space. Other locations use a matching Open-Meteo archive download; later syncs update the latest available date. Missing values remain missing. Weather data by Open-Meteo.com (CC BY 4.0). Reanalysis is modelled historical weather, not a local station observation. Validation uses later unseen hours and is not a guarantee of forecast accuracy. The feedback correction compares completed predictions with later matching Open-Meteo Best Match hourly values; these are not independent station observations."
+        val attribution = "Historical hourly temperature targets and predictors: Open-Meteo Historical Weather API, Best Match reanalysis. The complete published archive is downloaded once, retained in local SQLite as a cache, and transferred in resumable batches to the TempLearn cloud engine for training. The cloud fills gaps with up to 96 completed past hours, deduplicating timestamps already in the archive. Future provider temperature forecasts are not used. The temporary archive file is removed after the cloud has successfully received the history and trained its model. Other locations use a matching Open-Meteo archive. Missing values remain missing. Weather data by Open-Meteo.com (CC BY 4.0). Reanalysis is modelled historical weather, not a local station observation. Validation uses later unseen hours and is not a guarantee of forecast accuracy. The feedback correction compares completed predictions with later matching Open-Meteo Best Match hourly values; these are not independent station observations."
         addText(content, attribution, 11f, mutedColor, false).apply {
             val attributedText = android.text.SpannableString(attribution)
             val providerStart = attribution.indexOf("Open-Meteo.com")
@@ -1068,7 +1068,7 @@ class MainActivity : Activity() {
 
         AlertDialog.Builder(this)
             .setTitle("Enable weather update notifications?")
-            .setMessage("TempLearn can notify you when an hourly weather refresh succeeds and the local model has been updated.")
+            .setMessage("TempLearn can notify you when the cloud has refreshed hourly weather, verified forecasts and updated its learning model.")
             .setPositiveButton("Enable") { _, _ ->
                 prefs.edit().putBoolean(AppPreferences.KEY_NOTIFICATION_PERMISSION_REQUESTED, true).apply()
                 requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), REQUEST_POST_NOTIFICATIONS)

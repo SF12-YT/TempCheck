@@ -38,6 +38,41 @@ function authorized(request: Request, env: Env): boolean {
 function iso(sec: number): string {
   return new Date(sec * 1000).toISOString();
 }
+
+/**
+ * Match Kotlin Instant.atZone(timezone).truncatedTo(HOURS).plusHours(1).
+ * We derive the active offset from the current instant, so non-whole-hour zones
+ * and DST gaps/overlaps retain the same elapsed-hour behaviour as ZonedDateTime.
+ */
+function localHourFloorTimestampSec(timestampSec: number, timezone: string): number {
+  let formatter: Intl.DateTimeFormat;
+  try {
+    formatter = new Intl.DateTimeFormat("en-CA", {
+      timeZone: timezone,
+      year: "numeric", month: "2-digit", day: "2-digit",
+      hour: "2-digit", minute: "2-digit", second: "2-digit",
+      hourCycle: "h23"
+    });
+  } catch {
+    formatter = new Intl.DateTimeFormat("en-CA", {
+      timeZone: "UTC",
+      year: "numeric", month: "2-digit", day: "2-digit",
+      hour: "2-digit", minute: "2-digit", second: "2-digit",
+      hourCycle: "h23"
+    });
+  }
+  const fields = Object.fromEntries(
+    formatter.formatToParts(new Date(timestampSec * 1000))
+      .filter(part => part.type !== "literal")
+      .map(part => [part.type, Number(part.value)])
+  ) as Record<string, number>;
+  const wallCurrentSec = Date.UTC(
+    fields.year, fields.month - 1, fields.day,
+    fields.hour, fields.minute, fields.second
+  ) / 1000;
+  const offsetSec = wallCurrentSec - timestampSec;
+  return Date.UTC(fields.year, fields.month - 1, fields.day, fields.hour) / 1000 - offsetSec;
+}
 function finiteNumber(value: unknown): number | null {
   return typeof value === "number" && Number.isFinite(value) ? value : null;
 }
@@ -261,7 +296,7 @@ async function fetchPastObservations(env: Env, locationId: string, issuedSec: nu
   const hourly = payload.hourly;
   if (!hourly || !Array.isArray(hourly.time)) throw new Error("Open-Meteo response has no hourly history");
   const times = hourly.time as unknown[];
-  const completedBeforeSec = Math.floor(issuedSec / HOUR) * HOUR;
+  const completedBeforeSec = localHourFloorTimestampSec(issuedSec, location.timezone);
   const rows: Observation[] = [];
   for (let index = 0; index < times.length; index++) {
     const timestampSec = finiteNumber(times[index]);
@@ -630,7 +665,7 @@ async function generateForecast(env: Env, locationId: string, nowSec: number): P
       observations[2].timestampSec-observations[1].timestampSec!==HOUR) return null;
   // Current Mount Boyce/Sydney civil-hour boundaries align to UTC hour boundaries.
   // Only completed observations are features; no provider forecast temperatures are used.
-  const targetSec = (Math.floor(nowSec / HOUR) + 1) * HOUR;
+  const targetSec = localHourFloorTimestampSec(nowSec, location.timezone) + HOUR;
   const feedback = await loadCloudFeedback(env,locationId);
   const prediction = predict({
     weights: state.model.weights, observations, feedback,

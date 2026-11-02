@@ -144,7 +144,7 @@ class HourlySyncService : Service() {
         val notification = Notification.Builder(this, STATUS_CHANNEL_ID)
             .setSmallIcon(android.R.drawable.ic_popup_sync)
             .setContentTitle("TempLearn hourly refresh")
-            .setContentText("Refreshing hourly weather and updating the local model…")
+            .setContentText("Refreshing hourly weather and syncing the cloud model…")
             .setOngoing(true)
             .setOnlyAlertOnce(true)
             .build()

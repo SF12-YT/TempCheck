@@ -28,8 +28,8 @@ object NotificationHelper {
         val manager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
         val phase = if (result.initialImportCompletedNow) "Initial archive from 2000-01-01 completed"
             else "Latest local date refreshed"
-        val model = if (result.modelReady) "Model updated · ${result.trainingExamples} local examples"
-            else "Weather saved · more consecutive hours are needed for local learning"
+        val model = if (result.modelReady) "Cloud model updated · ${result.trainingExamples} training examples"
+            else "Weather cached · more completed hourly inputs are needed for cloud training"
         val warning = result.recentUpdateWarning?.let {
             "Recent hourly refresh failed; historical learning was retained and the app will retry. $it"
         }.orEmpty()
