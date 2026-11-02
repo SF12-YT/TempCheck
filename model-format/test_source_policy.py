@@ -151,7 +151,7 @@ class SourcePolicyTests(unittest.TestCase):
         self.assertNotIn("minOf(latestDate ?: archiveEndDate, archiveEndDate)", sync)
         self.assertIn("private fun refreshRecentForecastDataset", sync)
         self.assertIn("downloadRecentHourlyForecastToFile", sync)
-        self.assertIn("recent_forecast_past_${pendingLookbackHours}h.csv", sync)
+        self.assertIn("recent_forecast_past.csv", sync)
         self.assertIn("getOldestPendingPredictionTimestampSec", sync)
         self.assertIn("pastHours = pendingLookbackHours", sync)
         self.assertNotIn("recent_forecast_yesterday_today.csv", sync)
