@@ -9,7 +9,7 @@ crons = ["0 * * * *"]
 [[d1_databases]]
 binding = "DB"
 database_name = "templearn-forecasts"
-database_id = "REPLACE_WITH_CLOUDFLARE_D1_DATABASE_ID"
+database_id = "f6af2944-b2b9-43d0-ab87-886cacc632b8"
 migrations_dir = "migrations"
 
 [vars]
