@@ -500,7 +500,10 @@ async function trainModel(env: Env, locationId: string, beforeTimestampSec?: num
   );
   if (!model) return null;
 
-  const shared = trainSharedFromSeriesExamples(
+  // With a single bootstrapped location, the shared model's training set and
+  // chronological split are identical to the local model. Reuse the result
+  // instead of running the same 250-epoch fit a second time.
+  const shared = otherSeries.length === 0 ? model : trainSharedFromSeriesExamples(
     [...preparedByLocation.values()],Math.floor(Date.now()/1000)
   );
   await saveTrainedModel(env,locationId,model,activeLocation,activeTraining.endSec);
