@@ -1,5 +1,5 @@
 import { predict, type ErrorSample, type ModelContext, type Observation } from "./inference";
-interface Env { DB:D1Database; LOCATION_ID:string; TIMEZONE:string; LATITUDE:string; LONGITUDE:string; }
+interface Env { DB:D1Database; LOCATION_ID:string; TIMEZONE:string; LATITUDE:string; LONGITUDE:string; SYNC_KEY?:string; }
 function json(data:unknown,status=200){return new Response(JSON.stringify(data),{status,headers:{"content-type":"application/json","access-control-allow-origin":"*","cache-control":"no-store"}});}
 async function ensureSchema(env:Env){
  await env.DB.prepare("CREATE TABLE IF NOT EXISTS cloud_model_state (location_id TEXT PRIMARY KEY NOT NULL, weights_json TEXT NOT NULL, observations_json TEXT NOT NULL, feedback_json TEXT NOT NULL, context_json TEXT NOT NULL, timezone TEXT NOT NULL, model_version TEXT NOT NULL, updated_at TEXT NOT NULL)").run();
