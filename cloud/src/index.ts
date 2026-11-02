@@ -47,9 +47,7 @@ async function fetchPastObservations(env:Env,issuedSec:number):Promise<Observati
 async function loadCloudFeedback(env:Env,uploaded:ErrorSample[]):Promise<ErrorSample[]>{
  const result=await env.DB.prepare("SELECT target_timestamp_sec,predicted_temp_c,actual_temp_c,local_hour,temperature_trend_c,cloud_cover_pct,solar_radiation_wm2,weather_code FROM cloud_verified_forecasts WHERE location_id=? ORDER BY target_timestamp_sec DESC LIMIT 5000").bind(env.LOCATION_ID).all<Record<string,unknown>>();
  const cloud=(result.results||[]).map(r=>({targetTimestampSec:Number(r.target_timestamp_sec),predictedTempC:Number(r.predicted_temp_c),actualTempC:Number(r.actual_temp_c),localHour:Number(r.local_hour),temperatureTrendC:Number(r.temperature_trend_c),cloudCoverPct:r.cloud_cover_pct==null?null:Number(r.cloud_cover_pct),solarRadiationWm2:r.solar_radiation_wm2==null?null:Number(r.solar_radiation_wm2),weatherCode:r.weather_code==null?null:Number(r.weather_code)}));
- const byKey=new Map<string,ErrorSample>();
- for(const sample of [...uploaded,...cloud])byKey.set(String(sample.targetTimestampSec),sample);
- return [...byKey.values()].sort((a,b)=>b.targetTimestampSec-a.targetTimestampSec);
+ return [...uploaded,...cloud].sort((a,b)=>b.targetTimestampSec-a.targetTimestampSec);
 }
 async function reconcileForecasts(env:Env,observations:Observation[],verifiedAtSec:number){
  for(const actual of observations){
