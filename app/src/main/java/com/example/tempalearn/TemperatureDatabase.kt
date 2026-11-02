@@ -418,6 +418,30 @@ class TemperatureDatabase(context: Context) : SQLiteOpenHelper(
         return result
     }
 
+    /** Read one bounded, chronological page of canonical Best Match hours for cloud bootstrap. */
+    fun getReadingsPage(locationKey: String, afterTimestampSec: Long, limit: Int = 1000): List<HourlyTemperature> {
+        val safeLimit = limit.coerceIn(1, 1500)
+        val result = mutableListOf<HourlyTemperature>()
+        readableDatabase.rawQuery(
+            """SELECT timestamp_sec, temperature_c, dew_point_c, wind_speed_kmh, wind_gust_kmh,
+                pressure_hpa, humidity_pct, cloud_cover_pct, precipitation_mm, solar_radiation_wm2,
+                cloud_low_pct, cloud_mid_pct, cloud_high_pct, wind_direction_deg, soil_temperature_c,
+                soil_moisture_0_1cm, vapor_pressure_deficit_kpa, temperature_source,
+                surface_pressure_hpa, rain_mm, showers_mm, snowfall_cm, weather_code, visibility_m,
+                evapotranspiration_mm, et0_mm, uv_index, uv_index_clear_sky, wet_bulb_temperature_c,
+                apparent_temperature_c, shortwave_radiation_instant_wm2,
+                snow_depth_m, direct_radiation_wm2, diffuse_radiation_wm2, boundary_layer_height_m,
+                wind_speed_100m_kmh, wind_direction_100m_deg, soil_moisture_0_7cm
+                FROM readings
+                WHERE location_key=? AND temperature_source=? AND timestamp_sec>?
+                ORDER BY timestamp_sec ASC LIMIT $safeLimit""".trimIndent(),
+            arrayOf(locationKey, OpenMeteoClient.SOURCE, afterTimestampSec.toString())
+        ).use { cursor ->
+            while (cursor.moveToNext()) result += cursor.toWeatherReading()
+        }
+        return result
+    }
+
     /**
      * Load spaced four-hour windows for model fitting. The full archive remains in SQLite, while
      * the in-memory training set stays bounded as the local history grows.
