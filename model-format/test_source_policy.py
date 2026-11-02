@@ -81,7 +81,7 @@ class SourcePolicyTests(unittest.TestCase):
         self.assertIn('splitCsv(line).mapIndexed(::normalizeCsvHeaderCell)', client)
         self.assertIn('header = normalizedCells', client)
         self.assertIn('Header preview:', client)
-        self.assertIn('versionName = "0.10.9"', (ROOT / "app/build.gradle.kts").read_text(encoding="utf-8"))
+        self.assertIn('versionName = "0.10.10"', (ROOT / "app/build.gradle.kts").read_text(encoding="utf-8"))
 
     def test_pending_live_forecasts_expand_lookback_and_expose_match_diagnostics(self):
         database = (KOTLIN / "TemperatureDatabase.kt").read_text(encoding="utf-8")
