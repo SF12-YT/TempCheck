@@ -1,0 +1,1 @@
+{"name":"templearn-cloud","private":true,"version":"1.0.0","scripts":{"build":"wrangler deploy --dry-run","deploy":"wrangler deploy","preview":"wrangler dev"},"devDependencies":{"wrangler":"^4.45.0","typescript":"^5.9.3"}}
