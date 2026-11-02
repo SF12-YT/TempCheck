@@ -43,7 +43,7 @@ enum class ArchiveProgressStage { DOWNLOADING, IMPORTING }
 
 data class ArchiveDownloadProgress(
     val stage: ArchiveProgressStage,
-    val bytesProcessed: Long,
+    val bytesTransferred: Long,
     val totalBytes: Long
 ) {
     /** -1 means the server did not provide a content length; the UI should stay indeterminate. */
