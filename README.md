@@ -1,6 +1,10 @@
 # TempLearn — Open-Meteo hourly weather learning app
 
-TempLearn imports historical hourly weather from the **Open-Meteo Historical Weather API using Best Match**, retains the original dataset on-device and trains a next-hour air-temperature model locally. This release is **0.9.4**.
+TempLearn imports historical hourly weather from the **Open-Meteo Historical Weather API using Best Match**, retains the original dataset on-device and trains a next-hour air-temperature model locally. This release is **0.10.7**.
+
+## Background service diagnostic
+
+Version 0.10.7 adds an optional Settings test that starts a user-initiated Android foreground service. It refreshes a single ongoing notification every five seconds and is intended to test whether the service continues after TempLearn is dismissed from Recents. Stop it from Settings or from the notification. Android can still stop the service after an explicit force-stop or system-level termination; this is a diagnostic, not a guarantee of uninterrupted execution.
 
 ## First launch and historical archive
 
