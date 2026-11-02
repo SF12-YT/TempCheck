@@ -6,6 +6,9 @@ plugins {
 }
 
 
+val cloudBaseUrl = System.getenv("TEMPLEARN_CLOUD_BASE_URL").orEmpty().replace("\\", "\\\\").replace("\"", "\\\"")
+val cloudSyncKey = System.getenv("TEMPLEARN_CLOUD_SYNC_KEY").orEmpty().replace("\\", "\\\\").replace("\"", "\\\"")
+
 val releaseKeystoreFile = System.getenv("ANDROID_KEYSTORE_FILE")
 val releaseKeystorePassword = System.getenv("ANDROID_KEYSTORE_PASSWORD")
 val releaseKeyAlias = System.getenv("ANDROID_KEY_ALIAS")
@@ -49,8 +52,10 @@ android {
         applicationId = "com.example.tempalearn"
         minSdk = 26
         targetSdk = 34
-        versionCode = 34
-        versionName = "0.10.9"
+        versionCode = 35
+        versionName = "0.10.10"
+        buildConfigField("String", "TEMPLEARN_CLOUD_BASE_URL", "\"$cloudBaseUrl\"")
+        buildConfigField("String", "TEMPLEARN_CLOUD_SYNC_KEY", "\"$cloudSyncKey\"")
     }
 
     compileOptions {
