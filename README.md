@@ -1,6 +1,14 @@
 # TempLearn — Open-Meteo hourly weather learning app
 
-TempLearn imports historical hourly weather from the **Open-Meteo Historical Weather API using Best Match**, retains the original dataset on-device and trains a next-hour air-temperature model locally. This release is **0.10.8**.
+TempLearn imports historical hourly weather from the **Open-Meteo Historical Weather API using Best Match**, retains the original dataset on-device and trains a next-hour air-temperature model locally. This release is **0.10.9**.
+
+## Automatic hourly refresh
+
+TempLearn schedules a one-shot background refresh for the next **local clock-hour boundary** (for example, 14:00, 15:00, 16:00), using the phone's current system timezone rather than the selected weather location's timezone. After each alarm fires, the next local-hour alarm is scheduled. The schedule is restored after reboot, app replacement, device time/date changes, timezone changes, and exact-alarm permission changes.
+
+The refresh uses the same `SyncRepository.sync()` path as the in-app refresh. A data-sync foreground service performs the download and local model update, then posts **“TempLearn hourly update successful”** only when the recent hourly refresh completes without a warning. If the request fails or Android cannot start the service, TempLearn posts a failure notification instead. Each run maintains the existing one-hour-ahead prediction flow; it does not generate a batch of multi-hour forecasts.
+
+On Android 12 and later, exact delivery requires the user to allow TempLearn under **Alarms & reminders**. When access is not granted, the app uses Android's inexact idle-friendly alarm fallback, which may be delayed by up to an hour. The Settings screen includes a button to open the exact-timing permission page.
 
 ## Live forecast-feed matching
 
