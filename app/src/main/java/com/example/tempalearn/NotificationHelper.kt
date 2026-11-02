@@ -36,7 +36,8 @@ object NotificationHelper {
         val body = "${result.resolvedAddress}: $phase · ${result.fetchedHours} fetched/updated hourly rows · ${result.savedReadings} stored rows. $model. $warning"
         val title = when {
             result.recentUpdateWarning != null -> "TempLearn history ready; recent refresh pending"
-            source == "daily" -> "TempLearn hourly update complete"
+            source == "hourly" -> "TempLearn hourly update successful"
+            source == "daily" -> "TempLearn daily update complete"
             else -> "TempLearn history update complete"
         }
         val builder = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) android.app.Notification.Builder(context, CHANNEL_ID)
@@ -45,6 +46,28 @@ object NotificationHelper {
             .setContentTitle(title)
             .setContentText(body.take(180))
             .setStyle(android.app.Notification.BigTextStyle().bigText(body))
+            .setAutoCancel(true)
+            .build()
+        manager.notify((System.currentTimeMillis() % Int.MAX_VALUE).toInt(), notification)
+
+    
+    fun showSyncFailure(context: Context, message: String, source: String) {
+        if (Build.VERSION.SDK_INT >= 33 &&
+            context.checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
+        ) return
+        createChannel(context)
+        val manager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+        val title = if (source == "hourly") {
+            "TempLearn hourly update failed"
+        } else {
+            "TempLearn weather update failed"
+        }
+        val builder = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) android.app.Notification.Builder(context, CHANNEL_ID)
+            else { @Suppress("DEPRECATION") android.app.Notification.Builder(context) }
+        val notification = builder.setSmallIcon(android.R.drawable.ic_dialog_alert)
+            .setContentTitle(title)
+            .setContentText(message.take(180))
+            .setStyle(android.app.Notification.BigTextStyle().bigText(message))
             .setAutoCancel(true)
             .build()
         manager.notify((System.currentTimeMillis() % Int.MAX_VALUE).toInt(), notification)
