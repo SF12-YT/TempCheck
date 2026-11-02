@@ -358,10 +358,63 @@ object SyncRepository {
                     )
                 )
             }
+            // Keep the model fixed for this import pass. Each newly arriving actual hour is
+            // checked against a one-hour prediction made from the three preceding observations,
+            // before that target row is inserted. This is a strict walk-forward replay: no target
+            // value or later observation can leak into its own prediction.
+            val walkForwardModel = db.getModel(locationKey)
+            val walkForwardHistory = db.getLatestReadings(locationKey, 72).toMutableList()
+            var feedbackSamples = db.getVerifiedPredictionErrors(locationKey)
+            var lastProcessedTimestamp = db.getLatestTimestampSec(locationKey) ?: Long.MIN_VALUE
+            val seenIncomingTimestamps = mutableSetOf<Long>()
             var uniqueForecastRows = 0
+
             OpenMeteoClient.importHourlyArchiveFile(
                 recentForecastFile,
-                onBatch = { batch -> uniqueForecastRows += db.insertReadingsIfAbsent(locationKey, batch) },
+                onBatch = { batch ->
+                    batch.sortedBy { it.timestampSec }.forEach { reading ->
+                        if (reading.timestampSec <= lastProcessedTimestamp ||
+                            !seenIncomingTimestamps.add(reading.timestampSec)
+                        ) return@forEach
+
+                        val walkForward = walkForwardModel?.let { model ->
+                            predictWalkForwardTarget(
+                                priorReadings = walkForwardHistory,
+                                targetTimestampSec = reading.timestampSec,
+                                model = model,
+                                timezoneId = profile.timezoneId,
+                                locationContext = profile.modelContext(),
+                                feedbackSamples = feedbackSamples
+                            )
+                        }
+                        walkForward?.let { prediction ->
+                            db.savePendingPrediction(
+                                locationKey = locationKey,
+                                targetTimestampSec = prediction.targetTimestampSec,
+                                predictedTempC = prediction.predictedTempC,
+                                predictedAtSec = prediction.predictionMadeAtSec,
+                                localHour = prediction.localHour,
+                                temperatureTrendC = prediction.temperatureTrendC,
+                                cloudCoverPct = prediction.cloudCoverPct,
+                                solarRadiationWm2 = prediction.solarRadiationWm2,
+                                weatherCode = prediction.weatherCode,
+                                verificationMethod = PredictionVerificationMethod.WALK_FORWARD_REPLAY
+                            )
+                        }
+
+                        val inserted = db.insertReadingsIfAbsent(locationKey, listOf(reading))
+                        if (inserted > 0) {
+                            uniqueForecastRows += inserted
+                            lastProcessedTimestamp = reading.timestampSec
+                            // The reading is now available, so reconcile its forecast before
+                            // using this error to adjust the next walk-forward prediction.
+                            db.reconcilePendingPredictions(locationKey)
+                            feedbackSamples = db.getVerifiedPredictionErrors(locationKey)
+                            walkForwardHistory += reading
+                            if (walkForwardHistory.size > 72) walkForwardHistory.removeAt(0)
+                        }
+                    }
+                },
                 onProgress = { transfer ->
                     onProgress(
                         ArchiveDownloadProgress(
@@ -372,8 +425,7 @@ object SyncRepository {
                     )
                 }
             )
-            // The newly imported hourly records can now verify pending forecasts
-            // whose exact target timestamps have become available.
+            // Reconcile any earlier live forecast that became available in this refresh.
             db.reconcilePendingPredictions(locationKey)
             prefs.edit().putLong(AppPreferences.syncTimeKey(locationKey), Instant.now().epochSecond).apply()
             return uniqueForecastRows
