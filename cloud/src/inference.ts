@@ -33,9 +33,13 @@ const norm = (v: number | null | undefined, center: number, scale: number): numb
 const clamp = (v: number, lo: number, hi: number): number => Math.max(lo, Math.min(hi, v));
 const radians = (v: number): number => v * Math.PI / 180;
 function localParts(epochSec: number, timezone: string) {
-  const parts = new Intl.DateTimeFormat("en-US", {
+  let parts: Intl.DateTimeFormatPart[];
+  try { parts = new Intl.DateTimeFormat("en-US", {
     timeZone: timezone, year: "numeric", month: "numeric", day: "numeric", hour: "numeric", hourCycle: "h23"
-  }).formatToParts(new Date(epochSec * 1000));
+  }).formatToParts(new Date(epochSec * 1000)); }
+  catch { parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: "UTC", year: "numeric", month: "numeric", day: "numeric", hour: "numeric", hourCycle: "h23"
+  }).formatToParts(new Date(epochSec * 1000)); }
   const p: Record<string, number> = {};
   for (const x of parts) if (x.type !== "literal") p[x.type] = Number(x.value);
   const date = new Date(Date.UTC(p.year, p.month - 1, p.day));
