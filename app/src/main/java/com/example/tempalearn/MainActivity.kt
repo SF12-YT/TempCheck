@@ -560,13 +560,13 @@ class MainActivity : Activity() {
                 val feedbackDescription = when {
                     predicted.verifiedPredictions > 0 -> String.format(
                         Locale.getDefault(),
-                        "%d verified forecasts · feedback correction %+.1f°C · %d pending",
+                        "%d verified one-hour checks · feedback correction %+.1f°C · %d pending",
                         predicted.verifiedPredictions,
                         predicted.correctionC,
                         pendingPredictions
                     )
                     pendingPredictions > 0 -> "$pendingPredictions forecast(s) pending an hourly reading"
-                    else -> "0 verified · no completed forecast checks yet"
+                    else -> "0 verified · no completed one-hour checks yet"
                 }
                 predictionSubtext.text = "$modelDescription · ${formatter.format(localTime)} local time · $feedbackDescription"
             } else {
