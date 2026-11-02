@@ -79,7 +79,33 @@ class SourcePolicyTests(unittest.TestCase):
         self.assertIn('splitCsv(line).mapIndexed(::normalizeCsvHeaderCell)', client)
         self.assertIn('header = normalizedCells', client)
         self.assertIn('Header preview:', client)
-        self.assertIn('versionName = "0.10.7"', (ROOT / "app/build.gradle.kts").read_text(encoding="utf-8"))
+        self.assertIn('versionName = "0.10.8"', (ROOT / "app/build.gradle.kts").read_text(encoding="utf-8"))
+
+    def test_pending_live_forecasts_expand_lookback_and_expose_match_diagnostics(self):
+        database = (KOTLIN / "TemperatureDatabase.kt").read_text(encoding="utf-8")
+        sync = (KOTLIN / "SyncRepository.kt").read_text(encoding="utf-8")
+        client = (KOTLIN / "OpenMeteoClient.kt").read_text(encoding="utf-8")
+        dashboard = (KOTLIN / "MainActivity.kt").read_text(encoding="utf-8")
+        self.assertIn("getOldestPendingPredictionTimestampSec", database)
+        self.assertIn("getPendingPredictionDiagnostics", database)
+        self.assertIn("LEFT JOIN readings r", database)
+        self.assertIn("oldestPendingTargetSec", sync)
+        self.assertIn("pastHours = pendingLookbackHours", sync)
+        self.assertIn("&past_hours=$safePastHours", client)
+        self.assertIn("Pending targets:", dashboard)
+        self.assertIn("provider value not loaded", dashboard)
+
+    def test_five_second_test_posts_distinct_high_importance_alerts(self):
+        service = (KOTLIN / "BackgroundNotificationTestService.kt").read_text(encoding="utf-8")
+        main = (KOTLIN / "MainActivity.kt").read_text(encoding="utf-8")
+        self.assertIn("TICK_INTERVAL_MS = 5_000L", service)
+        self.assertIn("NotificationManager.IMPORTANCE_HIGH", service)
+        self.assertIn("postTestAlertNotification()", service)
+        self.assertIn("manager.notify(notificationId, notification)", service)
+        self.assertIn('ALERT_CHANNEL_ID = "templearn_background_test_alerts_v2"', service)
+        self.assertIn("REQUEST_BACKGROUND_TEST_NOTIFICATIONS", main)
+        self.assertIn("onRequestPermissionsResult", main)
+        self.assertIn("areNotificationsEnabled()", main)
 
     def test_archive_streams_csv_and_json_and_preserves_missing_fields(self):
         client = (KOTLIN / "OpenMeteoClient.kt").read_text(encoding="utf-8")
