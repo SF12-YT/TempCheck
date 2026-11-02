@@ -79,7 +79,7 @@ class SourcePolicyTests(unittest.TestCase):
         self.assertIn('splitCsv(line).mapIndexed(::normalizeCsvHeaderCell)', client)
         self.assertIn('header = normalizedCells', client)
         self.assertIn('Header preview:', client)
-        self.assertIn('versionName = "0.10.4"', (ROOT / "app/build.gradle.kts").read_text(encoding="utf-8"))
+        self.assertIn('versionName = "0.10.5"', (ROOT / "app/build.gradle.kts").read_text(encoding="utf-8"))
 
     def test_archive_streams_csv_and_json_and_preserves_missing_fields(self):
         client = (KOTLIN / "OpenMeteoClient.kt").read_text(encoding="utf-8")
@@ -225,6 +225,15 @@ class SourcePolicyTests(unittest.TestCase):
         self.assertIn("APPEND_OR_REPLACE", worker)
         self.assertIn("DailySyncScheduler.ensureScheduled(applicationContext)", main)
         self.assertIn("DailySyncScheduler.rescheduleForLocation(applicationContext)", main)
+
+    def test_feedback_ui_separates_replay_backtests_from_live_forecasts(self):
+        database = (KOTLIN / "TemperatureDatabase.kt").read_text(encoding="utf-8")
+        main = (KOTLIN / "MainActivity.kt").read_text(encoding="utf-8")
+        self.assertIn("fun getVerifiedPredictionCount(locationKey: String, verificationMethod: String)", database)
+        self.assertIn("PredictionVerificationMethod.WALK_FORWARD_REPLAY", main)
+        self.assertIn("PredictionVerificationMethod.LIVE", main)
+        self.assertIn("walk-forward backtest checks", main)
+        self.assertIn("live forecasts verified", main)
 
     def test_database_discards_legacy_provider_data_on_upgrade(self):
         database = (KOTLIN / "TemperatureDatabase.kt").read_text(encoding="utf-8")
