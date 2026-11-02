@@ -82,4 +82,61 @@ class PredictionErrorLearnerTest {
         val result = correction(mixed, trend = 0.8)
         assertTrue("Expected the warming trend group to receive a positive adjustment", result.contextAdjustmentC > 0.0)
     }
+
+    private fun walkForwardModel() = LearnedWeatherModel(
+        weights = List(WeatherLearner.WEIGHT_COUNT) { 0.0 },
+        trainingExamples = 100,
+        validationMaeC = 1.0,
+        validationBiasC = 0.0,
+        validationExamples = 20,
+        trainedAtSec = targetTimestamp,
+        trainingStartSec = targetTimestamp - 100_000L,
+        trainingEndSec = targetTimestamp - 3_600L
+    )
+
+    private fun threePriorReadings(): List<HourlyTemperature> = listOf(
+        HourlyTemperature(targetTimestamp - 3 * 3_600L, 18.0),
+        HourlyTemperature(targetTimestamp - 2 * 3_600L, 19.0),
+        HourlyTemperature(targetTimestamp - 3_600L, 20.0)
+    )
+
+    @Test
+    fun walkForwardPredictionUsesOnlyTheThreeHoursImmediatelyBeforeItsTarget() {
+        val result = predictWalkForwardTarget(
+            priorReadings = threePriorReadings(),
+            targetTimestampSec = targetTimestamp,
+            model = walkForwardModel(),
+            timezoneId = "Australia/Sydney"
+        )
+
+        assertTrue("Expected a walk-forward estimate", result != null)
+        assertEquals(targetTimestamp, result!!.targetTimestampSec)
+        assertEquals(targetTimestamp - 3_600L, result.predictionMadeAtSec)
+        assertEquals(20.0, result.predictedTempC, 0.0001)
+        assertEquals(14, result.localHour)
+    }
+
+    @Test
+    fun walkForwardPredictionRejectsNonConsecutiveOrMismatchedTargets() {
+        val gap = threePriorReadings().mapIndexed { index, reading ->
+            if (index == 1) reading.copy(timestampSec = reading.timestampSec - 3_600L) else reading
+        }
+        assertTrue(
+            predictWalkForwardTarget(
+                priorReadings = gap,
+                targetTimestampSec = targetTimestamp,
+                model = walkForwardModel(),
+                timezoneId = "Australia/Sydney"
+            ) == null
+        )
+        assertTrue(
+            predictWalkForwardTarget(
+                priorReadings = threePriorReadings(),
+                targetTimestampSec = targetTimestamp + 3_600L,
+                model = walkForwardModel(),
+                timezoneId = "Australia/Sydney"
+            ) == null
+        )
+    }
+
 }
