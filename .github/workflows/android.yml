@@ -87,7 +87,7 @@ jobs:
           echo "Release keystore and alias verified."
 
       - name: Verify cloud configuration
-        if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+        if: github.event_name == 'push' || github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository)
         env:
           TEMPLEARN_CLOUD_BASE_URL: ${{ secrets.TEMPLEARN_CLOUD_BASE_URL }}
           TEMPLEARN_CLOUD_SYNC_KEY: ${{ secrets.TEMPLEARN_CLOUD_SYNC_KEY }}
