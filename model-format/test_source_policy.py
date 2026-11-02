@@ -193,9 +193,27 @@ class SourcePolicyTests(unittest.TestCase):
         self.assertIn("SQLiteDatabase.CONFLICT_IGNORE", database)
         self.assertIn("fun insertReadingsIfAbsent", database)
         self.assertGreaterEqual(sync.count("db.insertReadingsIfAbsent(locationKey, batch)"), 2)
-        self.assertIn("seenIncomingTimestamps", sync)
         self.assertIn("WALK_FORWARD_REPLAY", sync)
         self.assertIn("PRIMARY KEY(location_key, timestamp_sec)", database)
+
+    def test_recent_observation_replay_excludes_targets_from_training_and_backfills_existing_rows(self):
+        sync = (KOTLIN / "SyncRepository.kt").read_text(encoding="utf-8")
+        refresh = sync.split("private fun refreshRecentForecastDataset", 1)[1].split(
+            "fun pretrainHistoricalDataset", 1
+        )[0]
+        self.assertIn("val replayCutoffSec = Instant.now().epochSecond - 24L * 60L * 60L", refresh)
+        self.assertIn("val allReadingsForReplay = db.getAllReadingsByLocation()[locationKey].orEmpty()", refresh)
+        self.assertIn("it.timestampSec < replayCutoffSec", refresh)
+        self.assertIn("val replayModel = WeatherLearner.trainLocal", refresh)
+        self.assertIn("val existingRecentReadings = existingLatest.filter", refresh)
+        self.assertIn("val feedbackBeforeTarget = db.getVerifiedPredictionErrors(locationKey)", refresh)
+        self.assertIn("it.targetTimestampSec < reading.timestampSec", refresh)
+        self.assertIn("verificationMethod = PredictionVerificationMethod.WALK_FORWARD_REPLAY", refresh)
+        self.assertLess(
+            refresh.index("predictWalkForwardTarget"),
+            refresh.index("db.insertReadingsIfAbsent(locationKey, listOf(reading))")
+        )
+        self.assertNotIn("db.saveModel(locationKey, replayModel", refresh)
 
     def test_background_sync_is_scheduled_for_local_noon(self):
         worker = (KOTLIN / "DailySyncWorker.kt").read_text(encoding="utf-8")
