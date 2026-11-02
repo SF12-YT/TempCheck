@@ -79,7 +79,7 @@ class SourcePolicyTests(unittest.TestCase):
         self.assertIn('splitCsv(line).mapIndexed(::normalizeCsvHeaderCell)', client)
         self.assertIn('header = normalizedCells', client)
         self.assertIn('Header preview:', client)
-        self.assertIn('versionName = "0.10.5"', (ROOT / "app/build.gradle.kts").read_text(encoding="utf-8"))
+        self.assertIn('versionName = "0.10.6"', (ROOT / "app/build.gradle.kts").read_text(encoding="utf-8"))
 
     def test_archive_streams_csv_and_json_and_preserves_missing_fields(self):
         client = (KOTLIN / "OpenMeteoClient.kt").read_text(encoding="utf-8")
@@ -235,6 +235,14 @@ class SourcePolicyTests(unittest.TestCase):
         self.assertIn("walk-forward backtest checks", main)
         self.assertIn("live forecasts verified", main)
 
+    def test_live_forecast_targets_next_local_hour_when_observations_lag(self):
+        feedback = (KOTLIN / "PredictionFeedback.kt").read_text(encoding="utf-8")
+        learner = (KOTLIN / "TemperatureLearner.kt").read_text(encoding="utf-8")
+        self.assertIn("nextLocalHourTimestamp(nowSec, timezoneId)", feedback)
+        self.assertIn("WeatherLearner.predictAtTimestamp", feedback)
+        self.assertIn("MAX_LIVE_FORECAST_LEAD_HOURS = 3L", learner)
+        self.assertNotIn("if (base.first > nowSec)", feedback)
+
     def test_database_discards_legacy_provider_data_on_upgrade(self):
         database = (KOTLIN / "TemperatureDatabase.kt").read_text(encoding="utf-8")
         self.assertIn("DATABASE_VERSION = 14", database)
@@ -324,7 +332,9 @@ class SourcePolicyTests(unittest.TestCase):
         self.assertIn("getPendingPredictionCount", main)
         self.assertIn("prediction_feedback", database)
         self.assertIn("actual_temp_c IS NULL", database)
-        self.assertIn("if (base.first > nowSec)", feedback)
+        self.assertIn("nextLocalHourTimestamp(nowSec, timezoneId)", feedback)
+        self.assertIn("WeatherLearner.predictAtTimestamp", feedback)
+        self.assertNotIn("if (base.first > nowSec)", feedback)
 
     def test_historical_json_is_deleted_only_after_successful_training(self):
         sync = (KOTLIN / "SyncRepository.kt").read_text(encoding="utf-8")
