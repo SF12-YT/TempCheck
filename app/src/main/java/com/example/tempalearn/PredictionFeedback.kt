@@ -20,6 +20,13 @@ data class PredictionErrorSample(
     val weatherCode: Int?
 )
 
+data class PendingPredictionDiagnostic(
+    val targetTimestampSec: Long,
+    val predictionMadeAtSec: Long,
+    val verificationMethod: String,
+    val matchingReadingTempC: Double?
+)
+
 data class PredictionCorrection(
     val correctionC: Double,
     val verifiedPredictions: Int,
