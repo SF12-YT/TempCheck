@@ -1,0 +1,19 @@
+name = "templearn-cloud"
+main = "src/index.ts"
+compatibility_date = "2026-11-02"
+workers_dev = true
+
+[triggers]
+crons = ["0 * * * *"]
+
+[[d1_databases]]
+binding = "DB"
+database_name = "templearn-forecasts"
+database_id = "REPLACE_WITH_CLOUDFLARE_D1_DATABASE_ID"
+migrations_dir = "migrations"
+
+[vars]
+LOCATION_ID = "mount-boyce-au"
+LATITUDE = "-33.6153"
+LONGITUDE = "150.2665"
+TIMEZONE = "Australia/Sydney"
