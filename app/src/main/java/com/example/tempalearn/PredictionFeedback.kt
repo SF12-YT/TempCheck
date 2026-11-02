@@ -2,6 +2,7 @@ package com.example.tempalearn
 
 import java.time.Instant
 import java.time.ZoneId
+import java.time.temporal.ChronoUnit
 import kotlin.math.exp
 
 /**
@@ -49,6 +50,19 @@ data class WalkForwardPrediction(
     val weatherCode: Int?,
     val correctionC: Double
 )
+
+/**
+ * Return the next hourly boundary in the selected location's local timezone.
+ * This stays strictly in the future even when the newest provider observation is delayed.
+ */
+fun nextLocalHourTimestamp(nowSec: Long, timezoneId: String): Long {
+    val zone = runCatching { ZoneId.of(timezoneId) }.getOrElse { ZoneId.of("UTC") }
+    return Instant.ofEpochSecond(nowSec)
+        .atZone(zone)
+        .truncatedTo(ChronoUnit.HOURS)
+        .plusHours(1)
+        .toEpochSecond()
+}
 
 /**
  * Replays one strict one-hour step using only observations that precede the target.
@@ -255,7 +269,14 @@ fun predictAndStoreNextHour(
     // reading may already be stored (for example after a retry or another import path).
     database.reconcilePendingPredictions(locationKey, nowSec)
 
-    val base = WeatherLearner.predictNext(readings, model, timezoneId, locationContext) ?: return null
+    val targetTimestampSec = nextLocalHourTimestamp(nowSec, timezoneId)
+    val base = WeatherLearner.predictAtTimestamp(
+        readings = readings,
+        model = model,
+        timezoneId = timezoneId,
+        targetTimestampSec = targetTimestampSec,
+        locationContext = locationContext
+    ) ?: return null
     val latest = readings.takeLast(3)
     if (latest.size != 3) return null
     val mostRecent = latest.last()
@@ -271,24 +292,20 @@ fun predictAndStoreNextHour(
     )
     val adjustedTemperature = (base.second + correction.correctionC).coerceIn(-90.0, 70.0)
 
-    // Only genuinely prospective predictions may enter the feedback dataset. Never label
-    // an estimate produced after its target hour as a forecast.
-    if (base.first > nowSec) {
-        val localHour = runCatching {
-            Instant.ofEpochSecond(base.first).atZone(ZoneId.of(timezoneId)).hour
-        }.getOrDefault(Instant.ofEpochSecond(base.first).atZone(ZoneId.of("UTC")).hour)
-        database.savePendingPrediction(
-            locationKey = locationKey,
-            targetTimestampSec = base.first,
-            predictedTempC = adjustedTemperature,
-            predictedAtSec = nowSec,
-            localHour = localHour,
-            temperatureTrendC = trend,
-            cloudCoverPct = mostRecent.cloudCoverPct,
-            solarRadiationWm2 = mostRecent.solarRadiationWm2,
-            weatherCode = mostRecent.weatherCode
-        )
-    }
+    // nextLocalHourTimestamp always selects a future local-hour boundary. The predictor
+    // also enforces a maximum three-hour lead from the newest observation.
+    val localHour = Instant.ofEpochSecond(base.first).atZone(ZoneId.of(timezoneId)).hour
+    database.savePendingPrediction(
+        locationKey = locationKey,
+        targetTimestampSec = base.first,
+        predictedTempC = adjustedTemperature,
+        predictedAtSec = nowSec,
+        localHour = localHour,
+        temperatureTrendC = trend,
+        cloudCoverPct = mostRecent.cloudCoverPct,
+        solarRadiationWm2 = mostRecent.solarRadiationWm2,
+        weatherCode = mostRecent.weatherCode
+    )
 
     return FeedbackAdjustedPrediction(
         targetTimestampSec = base.first,
