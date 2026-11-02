@@ -48,7 +48,7 @@ function localParts(epochSec: number, timezone: string) {
     ? (new Date(Date.UTC(p.year + 1, 0, 1)).getTime() - Date.UTC(p.year, 0, 1)) / 86400000 : 365;
   return { hour: p.hour, dayOfYear, daysInYear };
 }
-function makeFeatures(targetSec: number, previous: Observation[], timezone: string, ctx: ModelContext): number[] {
+export function makeFeatures(targetSec: number, previous: Observation[], timezone: string, ctx: ModelContext): number[] {
   const local = localParts(targetSec, timezone);
   const hourAngle = 2 * Math.PI * local.hour / 24;
   const yearAngle = 2 * Math.PI * (local.dayOfYear - 1) / local.daysInYear;
