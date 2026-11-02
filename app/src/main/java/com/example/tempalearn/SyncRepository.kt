@@ -635,6 +635,15 @@ object SyncRepository {
                     timezoneId = downloaded.locationProfile.timezoneId,
                     locationContext = downloaded.locationProfile.modelContext()
                 )
+                // Cloud upload is best-effort: it must never invalidate a successful local sync.
+                runCatching {
+                    CloudSyncClient.upload(
+                        profile = downloaded.locationProfile,
+                        model = predictionModel,
+                        readings = latestReadings,
+                        feedback = finalDb.getVerifiedPredictionErrors(downloaded.locationKey)
+                    )
+                }
             }
             val latest = finalDb.getLatestTimestampSec(downloaded.locationKey)
             val endDate = latest?.let {
