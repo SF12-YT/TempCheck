@@ -1,10 +1,14 @@
 # TempLearn — Open-Meteo hourly weather learning app
 
-TempLearn imports historical hourly weather from the **Open-Meteo Historical Weather API using Best Match**, retains the original dataset on-device and trains a next-hour air-temperature model locally. This release is **0.10.7**.
+TempLearn imports historical hourly weather from the **Open-Meteo Historical Weather API using Best Match**, retains the original dataset on-device and trains a next-hour air-temperature model locally. This release is **0.10.8**.
 
-## Background service diagnostic
+## Live forecast-feed matching
 
-Version 0.10.7 adds an optional Settings test that starts a user-initiated Android foreground service. It refreshes a single ongoing notification every five seconds and is intended to test whether the service continues after TempLearn is dismissed from Recents. Stop it from Settings or from the notification. Android can still stop the service after an explicit force-stop or system-level termination; this is a diagnostic, not a guarantee of uninterrupted execution.
+The dashboard's live forecast-feed match count compares saved one-hour-ahead predictions with the Open-Meteo Best Match past-hour series at the exact target timestamp. Pending target times are shown beneath the forecast, including whether a target is still ahead, has passed but is not yet present in the provider feed, or already has a matching local reading. Each refresh requests enough past hours to cover the oldest still-pending target (up to 92 days), rather than silently dropping targets after a 24-hour gap. This feed is model output, not an independent thermometer or station-observation record; a separate observation provider is required for ground-station verification.
+
+## Five-second background notification test
+
+The optional Settings diagnostic runs as a user-started foreground service. It maintains a quiet ongoing service-status notification and posts a **separate high-importance alert every five seconds**. Test alerts expire after 25 seconds to avoid an unbounded notification backlog. The service is intended to survive dismissing TempLearn from Recents; Android can still stop it after an explicit force-stop, notification blocking, or system termination.
 
 ## First launch and historical archive
 
