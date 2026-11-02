@@ -2,12 +2,14 @@ package com.example.tempalearn
 
 import android.Manifest
 import android.app.Activity
+import android.app.AlarmManager
 import android.app.AlertDialog
 import android.app.NotificationManager
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.graphics.Canvas
+import android.net.Uri
 import android.graphics.Color
 import android.graphics.Paint
 import android.graphics.Path
@@ -122,15 +124,22 @@ class MainActivity : Activity() {
         NotificationHelper.createChannel(this)
         buildInterface()
         uiBuilt = true
-        DailySyncScheduler.ensureScheduled(applicationContext)
+        HourlySyncScheduler.ensureScheduled(applicationContext)
         refreshDashboard()
-        requestNotificationPermissionIfNeeded()
+        val notificationPromptShown = requestNotificationPermissionIfNeeded()
+        if (!notificationPromptShown) {
+            rootContainer.post { maybePromptExactHourlyAlarmAccess() }
+        }
         if (shouldAutoSync()) syncNow(manual = false)
     }
 
     override fun onResume() {
         super.onResume()
-        if (uiBuilt) refreshDashboard()
+        if (uiBuilt) {
+            refreshDashboard()
+            // Recompute against the current phone timezone and exact-alarm permission state.
+            HourlySyncScheduler.scheduleNext(applicationContext)
+        }
     }
 
     override fun onDestroy() {
@@ -364,6 +373,28 @@ class MainActivity : Activity() {
         }
         content.addView(saveButton, LinearLayout.LayoutParams(-1, dp(52)).apply { topMargin = dp(5); bottomMargin = dp(10) })
         addSpacer(content, 18)
+        val hourlyRefreshCard = newCard()
+        content.addView(hourlyRefreshCard, cardLayoutParams())
+        addText(hourlyRefreshCard, "AUTOMATIC HOURLY REFRESH", 11f, mutedColor, true)
+        addText(
+            hourlyRefreshCard,
+            "TempLearn refreshes the saved weather location at the start of each hour using this phone's timezone, even when the app is closed. After the refresh and model update, it posts a success notification. Exact timing requires Android's Alarms & reminders access.",
+            12f,
+            mutedColor,
+            false
+        ).apply { setPadding(0, dp(7), 0, dp(10)); setLineSpacing(dp(2).toFloat(), 1.0f) }
+        val exactAlarmButton = Button(this).apply {
+            text = "Enable exact hourly timing"
+            isAllCaps = false
+            textSize = 14f
+            setTextColor(greenColor)
+            background = roundedDrawable(Color.WHITE, 13, Color.rgb(221, 232, 227))
+            minHeight = dp(46)
+            stateListAnimator = null
+            setOnClickListener { openExactHourlyAlarmSettings() }
+        }
+        hourlyRefreshCard.addView(exactAlarmButton, LinearLayout.LayoutParams(-1, dp(46)))
+
         val backgroundTestCard = newCard()
         content.addView(backgroundTestCard, cardLayoutParams())
         addText(backgroundTestCard, "BACKGROUND SERVICE TEST", 11f, mutedColor, true)
@@ -949,7 +980,7 @@ class MainActivity : Activity() {
                     .putString(AppPreferences.weatherPointModeKey(locationKey), weatherPointMode)
                     .putString(AppPreferences.weatherPointNameKey(locationKey), weatherPlace.displayName)
                     .apply()
-                DailySyncScheduler.rescheduleForLocation(applicationContext)
+                HourlySyncScheduler.rescheduleForLocation(applicationContext)
                 runOnUiThread {
                     showSettings(false)
                     refreshDashboard()
@@ -1030,22 +1061,63 @@ class MainActivity : Activity() {
         }
     }
 
-    private fun requestNotificationPermissionIfNeeded() {
-        if (Build.VERSION.SDK_INT < 33) return
-        if (checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED) return
-        if (prefs.getBoolean(AppPreferences.KEY_NOTIFICATION_PERMISSION_REQUESTED, false)) return
+    private fun requestNotificationPermissionIfNeeded(): Boolean {
+        if (Build.VERSION.SDK_INT < 33) return false
+        if (checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED) return false
+        if (prefs.getBoolean(AppPreferences.KEY_NOTIFICATION_PERMISSION_REQUESTED, false)) return false
 
         AlertDialog.Builder(this)
             .setTitle("Enable weather update notifications?")
-            .setMessage("TempLearn can notify you when the daily hourly weather fetch succeeds and the local model has been updated.")
+            .setMessage("TempLearn can notify you when an hourly weather refresh succeeds and the local model has been updated.")
             .setPositiveButton("Enable") { _, _ ->
                 prefs.edit().putBoolean(AppPreferences.KEY_NOTIFICATION_PERMISSION_REQUESTED, true).apply()
                 requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), REQUEST_POST_NOTIFICATIONS)
             }
             .setNegativeButton("Not now") { _, _ ->
                 prefs.edit().putBoolean(AppPreferences.KEY_NOTIFICATION_PERMISSION_REQUESTED, true).apply()
+                rootContainer.post { maybePromptExactHourlyAlarmAccess() }
             }
             .show()
+        return true
+    }
+
+    private fun maybePromptExactHourlyAlarmAccess() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) return
+        val alarmManager = getSystemService(Context.ALARM_SERVICE) as AlarmManager
+        if (alarmManager.canScheduleExactAlarms()) return
+        if (prefs.getBoolean(KEY_EXACT_HOURLY_ALARM_PROMPTED, false)) return
+
+        prefs.edit().putBoolean(KEY_EXACT_HOURLY_ALARM_PROMPTED, true).apply()
+        AlertDialog.Builder(this)
+            .setTitle("Enable exact hourly updates?")
+            .setMessage("Android requires Alarms & reminders access for TempLearn to refresh at exactly the start of each local hour. Without it, Android may delay an hourly refresh by up to an hour.")
+            .setPositiveButton("Open Alarms & reminders") { _, _ ->
+                openExactHourlyAlarmSettings()
+            }
+            .setNegativeButton("Use flexible timing", null)
+            .show()
+    }
+
+    private fun openExactHourlyAlarmSettings() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) {
+            Toast.makeText(this, "Exact hourly timing is available automatically on this Android version.", Toast.LENGTH_SHORT).show()
+            return
+        }
+        val alarmManager = getSystemService(Context.ALARM_SERVICE) as AlarmManager
+        if (alarmManager.canScheduleExactAlarms()) {
+            HourlySyncScheduler.scheduleNext(applicationContext)
+            Toast.makeText(this, "Exact hourly refresh is already enabled.", Toast.LENGTH_SHORT).show()
+            return
+        }
+        try {
+            startActivity(
+                Intent(AlarmManager.ACTION_REQUEST_SCHEDULE_EXACT_ALARM).apply {
+                    data = Uri.parse("package:$packageName")
+                }
+            )
+        } catch (error: Exception) {
+            Toast.makeText(this, "Could not open Alarms & reminders settings: ${error.message ?: "settings unavailable"}", Toast.LENGTH_LONG).show()
+        }
     }
 
     override fun onRequestPermissionsResult(
@@ -1054,6 +1126,10 @@ class MainActivity : Activity() {
         grantResults: IntArray
     ) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        if (requestCode == REQUEST_POST_NOTIFICATIONS) {
+            rootContainer.post { maybePromptExactHourlyAlarmAccess() }
+            return
+        }
         if (requestCode == REQUEST_BACKGROUND_TEST_NOTIFICATIONS) {
             if (grantResults.firstOrNull() == PackageManager.PERMISSION_GRANTED) {
                 startBackgroundNotificationTest()
@@ -1146,7 +1222,7 @@ class MainActivity : Activity() {
         }
     }
 
-    private fun scheduleDailySync() = DailySyncScheduler.ensureScheduled(applicationContext)
+    private fun scheduleHourlySync() = HourlySyncScheduler.ensureScheduled(applicationContext)
 
     private fun newCard(color: Int = Color.WHITE): LinearLayout = LinearLayout(this).apply {
         orientation = LinearLayout.VERTICAL
@@ -1190,6 +1266,7 @@ class MainActivity : Activity() {
     companion object {
         private const val REQUEST_POST_NOTIFICATIONS = 104
         private const val REQUEST_BACKGROUND_TEST_NOTIFICATIONS = 105
+        private const val KEY_EXACT_HOURLY_ALARM_PROMPTED = "exact_hourly_alarm_prompted_v1"
         private const val REQUEST_EXPORT_MODEL = 7412
     }
 
