@@ -10,7 +10,7 @@ The Worker ports the Android 62-coefficient inference model and its verified-err
 - `POST /v1/state` accepts the model weights, latest three consecutive hourly observations, verified prediction-error samples, timezone and location context.
 - `GET /v1/forecasts` reads stored TempLearn predictions.
 - The hourly Cron Trigger runs the same inference code and stores a new prediction vintage.
-- The Android app is **not connected yet**. Until it uploads a trained model and fresh observations, the Worker correctly reports that no model state is available and generates no forecast.
+- The Android client uploads the active 62-weight model and verified feedback after a successful local sync. The Worker independently fetches the same Best Match input fields using `past_hours=24&forecast_hours=0`; it never consumes future temperature values. Cloud predictions are reconciled against later completed past-hour inputs and their errors are added to the cloud feedback history.
 
 ## Cloudflare setup
 
@@ -30,12 +30,12 @@ Before allowing Android sync, create a Worker secret named `SYNC_KEY` in Cloudfl
 2. Add a secret named `SYNC_KEY` with a long random value.
 3. Redeploy if Cloudflare does not automatically activate the new secret.
 
-The Android client will send that value in the `x-templearn-key` request header. Do not put the secret in GitHub or in this repository.
+The Android client sends that value in the `x-templearn-key` request header. For the current personal prototype, add the same value as the GitHub Actions secret `TEMPLEARN_CLOUD_SYNC_KEY`. Also add `TEMPLEARN_CLOUD_BASE_URL` as a GitHub Actions secret containing the Worker base URL (use the actual URL shown on the Worker overview). The build injects these values into the APK; do not commit them to the repository. **Note:** a key embedded in an APK can be extracted, so this is a personal-use gate, not production-grade authentication for a publicly distributed app.
 
 ## API
 
 - `GET /health`
-- `POST /v1/state` — authenticated model-state upload.
+- `POST /v1/state` — authenticated Android model-state upload (62 weights, recent observations, verified error samples and location metadata).
 - `POST /v1/run` — authenticated manual inference run for testing.
 - `GET /v1/forecasts?from=2026-11-02T00:00:00Z&to=2026-11-05T00:00:00Z`
 
@@ -45,4 +45,4 @@ Each stored forecast includes its issue time, target time, base model output, fe
 
 ## Important observation-source limitation
 
-The Worker currently uses the latest three observations uploaded by Android. This is enough to validate cloud inference, but it does **not** keep the model supplied with new inputs while the phone is off. The next phase must add an independent feed of completed-hour Open-Meteo input observations (never Open-Meteo's forward temperature forecast), then reconcile cloud predictions with later actual readings. Do not treat stale uploaded readings as fresh forecasts.
+The independent feed is Open-Meteo Best Match past-hour data requested with `past_hours=24` and `forecast_hours=0`, matching the Android app's rolling recent-data request. The returned values are model-derived estimates rather than direct station thermometer readings; the app uses the same source for its recent-hour training and verification. The cloud never reads the provider's future temperature forecast. A cloud prediction is only verified when a later past-hour record contains the exact target timestamp.
