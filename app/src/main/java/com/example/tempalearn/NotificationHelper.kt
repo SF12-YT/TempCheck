@@ -49,8 +49,8 @@ object NotificationHelper {
             .setAutoCancel(true)
             .build()
         manager.notify((System.currentTimeMillis() % Int.MAX_VALUE).toInt(), notification)
+    }
 
-    
     fun showSyncFailure(context: Context, message: String, source: String) {
         if (Build.VERSION.SDK_INT >= 33 &&
             context.checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
