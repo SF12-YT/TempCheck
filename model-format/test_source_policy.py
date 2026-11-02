@@ -79,7 +79,7 @@ class SourcePolicyTests(unittest.TestCase):
         self.assertIn('splitCsv(line).mapIndexed(::normalizeCsvHeaderCell)', client)
         self.assertIn('header = normalizedCells', client)
         self.assertIn('Header preview:', client)
-        self.assertIn('versionName = "0.10.3"', (ROOT / "app/build.gradle.kts").read_text(encoding="utf-8"))
+        self.assertIn('versionName = "0.10.4"', (ROOT / "app/build.gradle.kts").read_text(encoding="utf-8"))
 
     def test_archive_streams_csv_and_json_and_preserves_missing_fields(self):
         client = (KOTLIN / "OpenMeteoClient.kt").read_text(encoding="utf-8")
@@ -150,7 +150,9 @@ class SourcePolicyTests(unittest.TestCase):
         )[0]
         self.assertIn("profile.timezoneId,\n                recentForecastFile", refresh)
         self.assertNotIn("val yesterday =", refresh)
-        self.assertIn("db.insertReadingsIfAbsent(locationKey, batch)", refresh)
+        self.assertIn("predictWalkForwardTarget", refresh)
+        self.assertIn("db.insertReadingsIfAbsent(locationKey, listOf(reading))", refresh)
+        self.assertLess(refresh.index("predictWalkForwardTarget"), refresh.index("db.insertReadingsIfAbsent(locationKey, listOf(reading))"))
 
     def test_completed_history_can_be_kept_in_sqlite_without_the_source_json(self):
         sync = (KOTLIN / "SyncRepository.kt").read_text(encoding="utf-8")
@@ -190,7 +192,9 @@ class SourcePolicyTests(unittest.TestCase):
         sync = (KOTLIN / "SyncRepository.kt").read_text(encoding="utf-8")
         self.assertIn("SQLiteDatabase.CONFLICT_IGNORE", database)
         self.assertIn("fun insertReadingsIfAbsent", database)
-        self.assertGreaterEqual(sync.count("db.insertReadingsIfAbsent(locationKey, batch)"), 3)
+        self.assertGreaterEqual(sync.count("db.insertReadingsIfAbsent(locationKey, batch)"), 2)
+        self.assertIn("seenIncomingTimestamps", sync)
+        self.assertIn("WALK_FORWARD_REPLAY", sync)
         self.assertIn("PRIMARY KEY(location_key, timestamp_sec)", database)
 
     def test_background_sync_is_scheduled_for_local_noon(self):
@@ -206,7 +210,9 @@ class SourcePolicyTests(unittest.TestCase):
 
     def test_database_discards_legacy_provider_data_on_upgrade(self):
         database = (KOTLIN / "TemperatureDatabase.kt").read_text(encoding="utf-8")
-        self.assertIn("DATABASE_VERSION = 13", database)
+        self.assertIn("DATABASE_VERSION = 14", database)
+        self.assertIn("verification_method TEXT NOT NULL DEFAULT 'LIVE'", database)
+        self.assertIn("oldVersion >= 13 && oldVersion < 14", database)
         self.assertIn("OpenMeteoClient.SOURCE", database)
         self.assertIn('db.execSQL("DELETE FROM readings")', database)
         self.assertIn('db.execSQL("DELETE FROM model_state")', database)
