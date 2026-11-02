@@ -81,7 +81,7 @@ class SourcePolicyTests(unittest.TestCase):
         self.assertIn('splitCsv(line).mapIndexed(::normalizeCsvHeaderCell)', client)
         self.assertIn('header = normalizedCells', client)
         self.assertIn('Header preview:', client)
-        self.assertIn('versionName = "0.10.8"', (ROOT / "app/build.gradle.kts").read_text(encoding="utf-8"))
+        self.assertIn('versionName = "0.10.9"', (ROOT / "app/build.gradle.kts").read_text(encoding="utf-8"))
 
     def test_pending_live_forecasts_expand_lookback_and_expose_match_diagnostics(self):
         database = (KOTLIN / "TemperatureDatabase.kt").read_text(encoding="utf-8")
@@ -247,16 +247,30 @@ class SourcePolicyTests(unittest.TestCase):
         )
         self.assertNotIn("db.saveModel(locationKey, replayModel", refresh)
 
-    def test_background_sync_is_scheduled_for_local_noon(self):
-        worker = (KOTLIN / "DailySyncWorker.kt").read_text(encoding="utf-8")
+    def test_hourly_background_refresh_uses_phone_timezone_and_top_of_hour_alarm(self):
+        scheduler = (KOTLIN / "HourlySync.kt").read_text(encoding="utf-8")
         main = (KOTLIN / "MainActivity.kt").read_text(encoding="utf-8")
-        self.assertIn("OneTimeWorkRequestBuilder<DailySyncWorker>()", worker)
-        self.assertIn("atTime(12, 0)", worker)
-        self.assertIn("NetworkType.CONNECTED", worker)
-        self.assertIn("enqueueUniqueWork", worker)
-        self.assertIn("APPEND_OR_REPLACE", worker)
-        self.assertIn("DailySyncScheduler.ensureScheduled(applicationContext)", main)
-        self.assertIn("DailySyncScheduler.rescheduleForLocation(applicationContext)", main)
+        manifest = (ROOT / "app/src/main/AndroidManifest.xml").read_text(encoding="utf-8")
+        notifications = (KOTLIN / "NotificationHelper.kt").read_text(encoding="utf-8")
+        self.assertIn("ZoneId.systemDefault()", scheduler)
+        self.assertIn("withMinute(0).withSecond(0).withNano(0).plusHours(1)", scheduler)
+        self.assertIn("setExactAndAllowWhileIdle", scheduler)
+        self.assertIn("canScheduleExactAlarms()", scheduler)
+        self.assertIn("setAndAllowWhileIdle", scheduler)
+        self.assertIn("ACTION_TIMEZONE_CHANGED", scheduler)
+        self.assertIn("ACTION_BOOT_COMPLETED", scheduler)
+        self.assertIn("ACTION_SCHEDULE_EXACT_ALARM_PERMISSION_STATE_CHANGED", scheduler)
+        self.assertIn("startForegroundService", scheduler)
+        self.assertIn("SyncRepository.sync(applicationContext, location)", scheduler)
+        self.assertIn('source = "hourly"', scheduler)
+        self.assertIn('source == "hourly" -> "TempLearn hourly update successful"', notifications)
+        self.assertIn("fun showSyncFailure", notifications)
+        self.assertIn('android:name=".HourlySyncService"', manifest)
+        self.assertIn("android.permission.SCHEDULE_EXACT_ALARM", manifest)
+        self.assertIn("android.permission.FOREGROUND_SERVICE_DATA_SYNC", manifest)
+        self.assertIn("HourlySyncScheduler.ensureScheduled(applicationContext)", main)
+        self.assertIn("maybePromptExactHourlyAlarmAccess", main)
+        self.assertIn("HourlySyncScheduler.rescheduleForLocation(applicationContext)", main)
 
     def test_feedback_ui_separates_replay_backtests_from_live_forecasts(self):
         database = (KOTLIN / "TemperatureDatabase.kt").read_text(encoding="utf-8")
